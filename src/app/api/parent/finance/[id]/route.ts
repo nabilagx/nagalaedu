@@ -149,15 +149,6 @@ function getAppUrl() {
   return appUrl.replace(/\/+$/, "")
 }
 
-/**
- * Generate order ID baru.
- *
- * Format:
- * NGL-SPP-{timestamp}-{random}
- *
- * Random suffix digunakan supaya sangat kecil kemungkinan
- * terjadi collision ketika request dibuat hampir bersamaan.
- */
 function generateOrderId() {
   const timestamp = Date.now()
 
@@ -196,8 +187,16 @@ export async function GET(
       id,
     )
 
-    if (billErrorResponse || !bill) {
-      return billErrorResponse
+    if (billErrorResponse || !bill || !student) {
+      return (
+        billErrorResponse ??
+        NextResponse.json(
+          {
+            error: "Tagihan atau data siswa tidak ditemukan.",
+          },
+          { status: 404 },
+        )
+      )
     }
 
     return NextResponse.json({
@@ -249,8 +248,24 @@ export async function POST(
     )
 
     if (billErrorResponse || !bill || !student) {
-      return billErrorResponse
+      return (
+        billErrorResponse ??
+        NextResponse.json(
+          {
+            error: "Tagihan atau data siswa tidak ditemukan.",
+          },
+          { status: 404 },
+        )
+      )
     }
+
+    /*
+     * Setelah guard di atas, buat konstanta non-null.
+     * Ini mencegah TypeScript menganggap bill/student
+     * masih mungkin null di dalam nested function.
+     */
+    const currentBill = bill
+    const currentStudent = student
 
     /*
      * ============================================================
@@ -259,7 +274,7 @@ export async function POST(
      */
 
     const paymentStatus = String(
-      bill.payment_status,
+      currentBill.payment_status,
     ).toUpperCase()
 
     if (paymentStatus === "PAID") {
@@ -296,7 +311,7 @@ export async function POST(
      * ============================================================
      */
 
-    const amount = Number(bill.amount)
+    const amount = Number(currentBill.amount)
 
     if (!Number.isFinite(amount)) {
       return NextResponse.json(
@@ -329,7 +344,7 @@ export async function POST(
 
     /*
      * ============================================================
-     * 3. VALIDASI MIDTRANS SERVER KEY
+     * 3. MIDTRANS SERVER KEY
      * ============================================================
      */
 
@@ -352,7 +367,7 @@ export async function POST(
 
     /*
      * ============================================================
-     * 4. VALIDASI APP URL
+     * 4. APP URL
      * ============================================================
      */
 
@@ -380,32 +395,33 @@ export async function POST(
 
     /*
      * ============================================================
-     * 5. GUNAKAN SNAP TOKEN YANG SUDAH ADA
+     * 5. REUSE SNAP TOKEN
      * ============================================================
      *
-     * Kalau transaksi sebelumnya sudah berhasil dibuat,
-     * jangan membuat transaksi Midtrans baru.
+     * Jika Snap Token masih ada, jangan membuat transaksi
+     * Midtrans baru.
      */
 
-    if (bill.snap_token) {
+    if (currentBill.snap_token) {
       console.log(
         "Reusing existing Midtrans Snap token:",
         {
-          bill_id: bill.id,
-          order_id: bill.order_id,
+          bill_id: currentBill.id,
+          order_id: currentBill.order_id,
         },
       )
 
       return NextResponse.json({
-        snap_token: bill.snap_token,
-        order_id: bill.order_id,
-        redirect_url: `${midtransBaseUrl}/snap/v4/redirection/${bill.snap_token}`,
+        snap_token: currentBill.snap_token,
+        order_id: currentBill.order_id,
+        redirect_url:
+          `${midtransBaseUrl}/snap/v4/redirection/${currentBill.snap_token}`,
       })
     }
 
     /*
      * ============================================================
-     * 6. AUTH HEADER MIDTRANS
+     * 6. MIDTRANS AUTH
      * ============================================================
      */
 
@@ -414,25 +430,25 @@ export async function POST(
     ).toString("base64")}`
 
     const finishUrl =
-      `${appUrl}/dashboard/parent/finance/${bill.id}`
+      `${appUrl}/dashboard/parent/finance/${currentBill.id}`
 
     /*
      * ============================================================
-     * 7. TENTUKAN ORDER ID
+     * 7. ORDER ID
      * ============================================================
      *
-     * Jika order_id lama tersedia, kita coba gunakan.
+     * Coba gunakan order_id yang sudah tersimpan.
      *
-     * Namun kalau Midtrans menolak karena order_id sudah pernah
-     * digunakan, kita generate order_id baru dan retry satu kali.
+     * Kalau kosong, generate baru.
      */
 
     let orderId =
-      bill.order_id || generateOrderId()
+      currentBill.order_id ||
+      generateOrderId()
 
     /*
      * ============================================================
-     * 8. FUNCTION UNTUK MEMBUAT TRANSAKSI MIDTRANS
+     * 8. FUNCTION CREATE MIDTRANS TRANSACTION
      * ============================================================
      */
 
@@ -442,7 +458,7 @@ export async function POST(
       console.log(
         "Creating Midtrans transaction:",
         {
-          bill_id: bill.id,
+          bill_id: currentBill.id,
           order_id: currentOrderId,
           amount,
           environment:
@@ -472,16 +488,17 @@ export async function POST(
 
             item_details: [
               {
-                id: bill.id,
+                id: currentBill.id,
                 price: amount,
                 quantity: 1,
-                name: `SPP ${student.student_name}`,
+                name:
+                  `SPP ${currentStudent.student_name}`,
               },
             ],
 
             customer_details: {
               first_name:
-                student.student_name,
+                currentStudent.student_name,
             },
 
             callbacks: {
@@ -493,7 +510,7 @@ export async function POST(
         },
       )
 
-      let data: MidtransSnapResponse
+      let data: MidtransSnapResponse | null
 
       try {
         data =
@@ -504,10 +521,7 @@ export async function POST(
           parseError,
         )
 
-        return {
-          response,
-          data: null,
-        }
+        data = null
       }
 
       return {
@@ -532,8 +546,8 @@ export async function POST(
      * 10. HANDLE DUPLICATE ORDER ID
      * ============================================================
      *
-     * Kalau order_id sudah pernah digunakan di Midtrans,
-     * generate order_id baru lalu retry SATU KALI.
+     * Jika Midtrans mengatakan order_id sudah pernah digunakan,
+     * buat order_id baru dan retry SATU KALI.
      */
 
     const duplicateOrderId =
@@ -554,11 +568,11 @@ export async function POST(
       orderId = generateOrderId()
 
       console.warn(
-        "Midtrans rejected duplicate order_id. Retrying with new order_id:",
+        "Midtrans rejected duplicate order_id. Retrying:",
         {
+          bill_id: currentBill.id,
           old_order_id: oldOrderId,
           new_order_id: orderId,
-          bill_id: bill.id,
         },
       )
 
@@ -570,7 +584,7 @@ export async function POST(
 
     /*
      * ============================================================
-     * 11. VALIDASI FINAL RESPONSE MIDTRANS
+     * 11. VALIDASI RESPONSE MIDTRANS
      * ============================================================
      */
 
@@ -586,11 +600,11 @@ export async function POST(
       console.error(
         "Midtrans Snap error:",
         {
+          bill_id: currentBill.id,
+          order_id: orderId,
           status:
             midtransResponse.status,
           data: midtransData,
-          bill_id: bill.id,
-          order_id: orderId,
         },
       )
 
@@ -613,10 +627,6 @@ export async function POST(
      * ============================================================
      * 12. SIMPAN ORDER ID + SNAP TOKEN
      * ============================================================
-     *
-     * Penting:
-     * order_id ikut disimpan supaya database selalu sinkron
-     * dengan transaksi yang benar-benar dibuat di Midtrans.
      */
 
     const { error: updateError } =
@@ -629,10 +639,10 @@ export async function POST(
           updated_at:
             new Date().toISOString(),
         })
-        .eq("id", bill.id)
+        .eq("id", currentBill.id)
         .eq(
           "student_id",
-          student.id,
+          currentStudent.id,
         )
 
     if (updateError) {
@@ -641,10 +651,6 @@ export async function POST(
         updateError,
       )
 
-      /*
-       * Transaksi Midtrans SUDAH berhasil dibuat,
-       * tetapi database gagal menyimpan token.
-       */
       return NextResponse.json(
         {
           error:
@@ -656,14 +662,14 @@ export async function POST(
 
     /*
      * ============================================================
-     * 13. RESPONSE KE FRONTEND
+     * 13. SUCCESS
      * ============================================================
      */
 
     console.log(
       "Midtrans transaction created successfully:",
       {
-        bill_id: bill.id,
+        bill_id: currentBill.id,
         order_id: orderId,
       },
     )
