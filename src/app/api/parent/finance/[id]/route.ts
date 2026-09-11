@@ -7,6 +7,13 @@ type RouteContext = {
   }>
 }
 
+type MidtransSnapResponse = {
+  token?: string
+  redirect_url?: string
+  status_code?: string
+  status_message?: string
+}
+
 async function getAuthenticatedParent() {
   const supabase = await createClient()
 
@@ -124,6 +131,22 @@ async function getOwnedBill(
   }
 }
 
+function getMidtransBaseUrl() {
+  return process.env.MIDTRANS_IS_PRODUCTION === "true"
+    ? "https://app.midtrans.com"
+    : "https://app.sandbox.midtrans.com"
+}
+
+function getAppUrl() {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim()
+
+  if (!appUrl) {
+    throw new Error("NEXT_PUBLIC_APP_URL belum dikonfigurasi.")
+  }
+
+  return appUrl.replace(/\/+$/, "")
+}
+
 export async function GET(
   _request: Request,
   context: RouteContext,
@@ -194,11 +217,28 @@ export async function POST(
       return billErrorResponse
     }
 
-    const paymentStatus = bill.payment_status.toUpperCase()
+    const paymentStatus = String(bill.payment_status).toUpperCase()
 
     if (paymentStatus === "PAID") {
       return NextResponse.json(
         { error: "Tagihan ini sudah lunas." },
+        { status: 400 },
+      )
+    }
+
+    if (paymentStatus === "CANCELLED") {
+      return NextResponse.json(
+        { error: "Tagihan ini sudah dibatalkan." },
+        { status: 400 },
+      )
+    }
+
+    if (paymentStatus === "EXPIRED") {
+      return NextResponse.json(
+        {
+          error:
+            "Tagihan ini sudah kedaluwarsa. Silakan hubungi Founder untuk membuat tagihan baru.",
+        },
         { status: 400 },
       )
     }
@@ -212,9 +252,19 @@ export async function POST(
       )
     }
 
+    if (!Number.isInteger(amount)) {
+      return NextResponse.json(
+        { error: "Nominal tagihan harus berupa angka bulat." },
+        { status: 400 },
+      )
+    }
+
     if (amount < 1000 || amount > 1000000) {
       return NextResponse.json(
-        { error: "Nominal tagihan harus antara Rp1.000 dan Rp1.000.000." },
+        {
+          error:
+            "Nominal tagihan harus antara Rp1.000 dan Rp1.000.000.",
+        },
         { status: 400 },
       )
     }
@@ -230,24 +280,55 @@ export async function POST(
       )
     }
 
-    /**
-     * Kalau Snap Token masih ada, kita gunakan kembali.
-     * Ini mencegah Parent membuat transaksi baru berkali-kali.
+    let appUrl: string
+
+    try {
+      appUrl = getAppUrl()
+    } catch (error) {
+      console.error("APP URL CONFIG ERROR:", error)
+
+      return NextResponse.json(
+        {
+          error:
+            "NEXT_PUBLIC_APP_URL belum dikonfigurasi di environment.",
+        },
+        { status: 500 },
+      )
+    }
+
+    const midtransBaseUrl = getMidtransBaseUrl()
+
+    /*
+     * Kalau Snap Token masih ada, gunakan kembali.
+     * Ini mencegah Parent membuat transaksi baru berkali-kali
+     * untuk tagihan yang sama.
      */
     if (bill.snap_token) {
       return NextResponse.json({
         snap_token: bill.snap_token,
         order_id: bill.order_id,
-        redirect_url: `https://app.sandbox.midtrans.com/snap/v4/redirection/${bill.snap_token}`,
+        redirect_url: `${midtransBaseUrl}/snap/v4/redirection/${bill.snap_token}`,
       })
     }
 
-    const authHeader = `Basic ${Buffer.from(`${serverKey}:`).toString(
-      "base64",
-    )}`
+    const authHeader = `Basic ${Buffer.from(
+      `${serverKey}:`,
+    ).toString("base64")}`
+
+    const finishUrl = `${appUrl}/dashboard/parent/finance/${bill.id}`
+
+    console.log("Creating Midtrans transaction:", {
+      order_id: bill.order_id,
+      amount,
+      environment:
+        process.env.MIDTRANS_IS_PRODUCTION === "true"
+          ? "production"
+          : "sandbox",
+      finish_url: finishUrl,
+    })
 
     const midtransResponse = await fetch(
-      "https://app.sandbox.midtrans.com/snap/v1/transactions",
+      `${midtransBaseUrl}/snap/v1/transactions`,
       {
         method: "POST",
         headers: {
@@ -274,17 +355,52 @@ export async function POST(
             first_name: student.student_name,
           },
 
+          /*
+           * Finish:
+           * dipakai setelah pembayaran selesai.
+           *
+           * Unfinish:
+           * dipakai ketika user menutup / belum menyelesaikan pembayaran.
+           *
+           * Error:
+           * dipakai ketika pembayaran mengalami error.
+           *
+           * Ketiganya diarahkan kembali ke halaman detail tagihan NAGALA.
+           */
           callbacks: {
-            finish: `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/dashboard/parent/finance/${bill.id}`,
+            finish: finishUrl,
+            unfinish: finishUrl,
+            error: finishUrl,
           },
         }),
       },
     )
 
-    const midtransData = await midtransResponse.json()
+    let midtransData: MidtransSnapResponse
+
+    try {
+      midtransData =
+        (await midtransResponse.json()) as MidtransSnapResponse
+    } catch (parseError) {
+      console.error(
+        "Midtrans response JSON parse error:",
+        parseError,
+      )
+
+      return NextResponse.json(
+        {
+          error:
+            "Respons dari Midtrans tidak dapat diproses.",
+        },
+        { status: 502 },
+      )
+    }
 
     if (!midtransResponse.ok || !midtransData.token) {
-      console.error("Midtrans Snap error:", midtransData)
+      console.error("Midtrans Snap error:", {
+        status: midtransResponse.status,
+        data: midtransData,
+      })
 
       return NextResponse.json(
         {
@@ -296,6 +412,12 @@ export async function POST(
       )
     }
 
+    /*
+     * Simpan Snap Token ke spp_bills.
+     *
+     * Tetap menggunakan Supabase client milik Parent
+     * karena bill sudah diverifikasi sebagai milik Parent.
+     */
     const { error: updateError } = await supabase
       .from("spp_bills")
       .update({
@@ -309,7 +431,10 @@ export async function POST(
       console.error("Save Snap token error:", updateError)
 
       return NextResponse.json(
-        { error: "Transaksi berhasil dibuat, tetapi token gagal disimpan." },
+        {
+          error:
+            "Transaksi berhasil dibuat, tetapi token gagal disimpan.",
+        },
         { status: 500 },
       )
     }
@@ -317,13 +442,16 @@ export async function POST(
     return NextResponse.json({
       snap_token: midtransData.token,
       order_id: bill.order_id,
-      redirect_url: `https://app.sandbox.midtrans.com/snap/v4/redirection/${midtransData.token}`,
+      redirect_url: `${midtransBaseUrl}/snap/v4/redirection/${midtransData.token}`,
     })
   } catch (error) {
     console.error("Parent finance payment POST error:", error)
 
     return NextResponse.json(
-      { error: "Terjadi kesalahan saat membuat pembayaran." },
+      {
+        error:
+          "Terjadi kesalahan saat membuat pembayaran.",
+      },
       { status: 500 },
     )
   }
