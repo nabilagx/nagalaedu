@@ -470,45 +470,62 @@ export async function POST(
         },
       )
 
-      const response = await fetch(
-        `${midtransBaseUrl}/snap/v1/transactions`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: authHeader,
-            "Content-Type":
-              "application/json",
-            Accept: "application/json",
-          },
-          body: JSON.stringify({
-            transaction_details: {
-              order_id: currentOrderId,
-              gross_amount: amount,
-            },
+      let response: Response
 
-            item_details: [
-              {
-                id: currentBill.id,
-                price: amount,
-                quantity: 1,
-                name:
-                  `SPP ${currentStudent.student_name}`,
-              },
-            ],
+try {
+  console.log("MIDTRANS FETCH START:", {
+    url: `${midtransBaseUrl}/snap/v1/transactions`,
+    order_id: currentOrderId,
+    amount,
+  })
 
-            customer_details: {
-              first_name:
-                currentStudent.student_name,
-            },
-
-            callbacks: {
-              finish: finishUrl,
-              unfinish: finishUrl,
-              error: finishUrl,
-            },
-          }),
+  response = await fetch(
+    `${midtransBaseUrl}/snap/v1/transactions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        transaction_details: {
+          order_id: currentOrderId,
+          gross_amount: amount,
         },
-      )
+
+        item_details: [
+          {
+            id: currentBill.id,
+            price: amount,
+            quantity: 1,
+            name: `SPP ${currentStudent.student_name}`,
+          },
+        ],
+
+        customer_details: {
+          first_name: currentStudent.student_name,
+        },
+
+        callbacks: {
+          finish: finishUrl,
+          unfinish: finishUrl,
+          error: finishUrl,
+        },
+      }),
+    },
+  )
+
+  console.log("MIDTRANS FETCH RESPONSE:", {
+    status: response.status,
+    statusText: response.statusText,
+    ok: response.ok,
+  })
+} catch (fetchError) {
+  console.error("MIDTRANS FETCH FAILED:", fetchError)
+
+  throw fetchError
+}
 
       let data: MidtransSnapResponse | null
 
