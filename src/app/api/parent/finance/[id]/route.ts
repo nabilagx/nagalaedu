@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server"
+
 import { createClient } from "@/lib/supabase/server"
 
 type RouteContext = {
@@ -12,6 +13,7 @@ type MidtransSnapResponse = {
   redirect_url?: string
   status_code?: string
   status_message?: string
+  error_messages?: string[]
 }
 
 async function getAuthenticatedParent() {
@@ -147,6 +149,26 @@ function getAppUrl() {
   return appUrl.replace(/\/+$/, "")
 }
 
+/**
+ * Generate order ID baru.
+ *
+ * Format:
+ * NGL-SPP-{timestamp}-{random}
+ *
+ * Random suffix digunakan supaya sangat kecil kemungkinan
+ * terjadi collision ketika request dibuat hampir bersamaan.
+ */
+function generateOrderId() {
+  const timestamp = Date.now()
+
+  const random = Math.random()
+    .toString(36)
+    .substring(2, 8)
+    .toUpperCase()
+
+  return `NGL-SPP-${timestamp}-${random}`
+}
+
 export async function GET(
   _request: Request,
   context: RouteContext,
@@ -168,7 +190,11 @@ export async function GET(
       bill,
       student,
       errorResponse: billErrorResponse,
-    } = await getOwnedBill(supabase, user.id, id)
+    } = await getOwnedBill(
+      supabase,
+      user.id,
+      id,
+    )
 
     if (billErrorResponse || !bill) {
       return billErrorResponse
@@ -181,10 +207,15 @@ export async function GET(
       },
     })
   } catch (error) {
-    console.error("Parent finance detail GET error:", error)
+    console.error(
+      "Parent finance detail GET error:",
+      error,
+    )
 
     return NextResponse.json(
-      { error: "Terjadi kesalahan pada server." },
+      {
+        error: "Terjadi kesalahan pada server.",
+      },
       { status: 500 },
     )
   }
@@ -211,24 +242,40 @@ export async function POST(
       bill,
       student,
       errorResponse: billErrorResponse,
-    } = await getOwnedBill(supabase, user.id, id)
+    } = await getOwnedBill(
+      supabase,
+      user.id,
+      id,
+    )
 
     if (billErrorResponse || !bill || !student) {
       return billErrorResponse
     }
 
-    const paymentStatus = String(bill.payment_status).toUpperCase()
+    /*
+     * ============================================================
+     * 1. VALIDASI STATUS PEMBAYARAN
+     * ============================================================
+     */
+
+    const paymentStatus = String(
+      bill.payment_status,
+    ).toUpperCase()
 
     if (paymentStatus === "PAID") {
       return NextResponse.json(
-        { error: "Tagihan ini sudah lunas." },
+        {
+          error: "Tagihan ini sudah lunas.",
+        },
         { status: 400 },
       )
     }
 
     if (paymentStatus === "CANCELLED") {
       return NextResponse.json(
-        { error: "Tagihan ini sudah dibatalkan." },
+        {
+          error: "Tagihan ini sudah dibatalkan.",
+        },
         { status: 400 },
       )
     }
@@ -243,18 +290,29 @@ export async function POST(
       )
     }
 
+    /*
+     * ============================================================
+     * 2. VALIDASI NOMINAL
+     * ============================================================
+     */
+
     const amount = Number(bill.amount)
 
     if (!Number.isFinite(amount)) {
       return NextResponse.json(
-        { error: "Nominal tagihan tidak valid." },
+        {
+          error: "Nominal tagihan tidak valid.",
+        },
         { status: 400 },
       )
     }
 
     if (!Number.isInteger(amount)) {
       return NextResponse.json(
-        { error: "Nominal tagihan harus berupa angka bulat." },
+        {
+          error:
+            "Nominal tagihan harus berupa angka bulat.",
+        },
         { status: 400 },
       )
     }
@@ -269,23 +327,44 @@ export async function POST(
       )
     }
 
-    const serverKey = process.env.MIDTRANS_SERVER_KEY
+    /*
+     * ============================================================
+     * 3. VALIDASI MIDTRANS SERVER KEY
+     * ============================================================
+     */
+
+    const serverKey =
+      process.env.MIDTRANS_SERVER_KEY
 
     if (!serverKey) {
-      console.error("MIDTRANS_SERVER_KEY belum dikonfigurasi.")
+      console.error(
+        "MIDTRANS_SERVER_KEY belum dikonfigurasi.",
+      )
 
       return NextResponse.json(
-        { error: "Konfigurasi pembayaran belum tersedia." },
+        {
+          error:
+            "Konfigurasi pembayaran belum tersedia.",
+        },
         { status: 500 },
       )
     }
+
+    /*
+     * ============================================================
+     * 4. VALIDASI APP URL
+     * ============================================================
+     */
 
     let appUrl: string
 
     try {
       appUrl = getAppUrl()
     } catch (error) {
-      console.error("APP URL CONFIG ERROR:", error)
+      console.error(
+        "APP URL CONFIG ERROR:",
+        error,
+      )
 
       return NextResponse.json(
         {
@@ -296,14 +375,27 @@ export async function POST(
       )
     }
 
-    const midtransBaseUrl = getMidtransBaseUrl()
+    const midtransBaseUrl =
+      getMidtransBaseUrl()
 
     /*
-     * Kalau Snap Token masih ada, gunakan kembali.
-     * Ini mencegah Parent membuat transaksi baru berkali-kali
-     * untuk tagihan yang sama.
+     * ============================================================
+     * 5. GUNAKAN SNAP TOKEN YANG SUDAH ADA
+     * ============================================================
+     *
+     * Kalau transaksi sebelumnya sudah berhasil dibuat,
+     * jangan membuat transaksi Midtrans baru.
      */
+
     if (bill.snap_token) {
+      console.log(
+        "Reusing existing Midtrans Snap token:",
+        {
+          bill_id: bill.id,
+          order_id: bill.order_id,
+        },
+      )
+
       return NextResponse.json({
         snap_token: bill.snap_token,
         order_id: bill.order_id,
@@ -311,141 +403,282 @@ export async function POST(
       })
     }
 
+    /*
+     * ============================================================
+     * 6. AUTH HEADER MIDTRANS
+     * ============================================================
+     */
+
     const authHeader = `Basic ${Buffer.from(
       `${serverKey}:`,
     ).toString("base64")}`
 
-    const finishUrl = `${appUrl}/dashboard/parent/finance/${bill.id}`
+    const finishUrl =
+      `${appUrl}/dashboard/parent/finance/${bill.id}`
 
-    console.log("Creating Midtrans transaction:", {
-      order_id: bill.order_id,
-      amount,
-      environment:
-        process.env.MIDTRANS_IS_PRODUCTION === "true"
-          ? "production"
-          : "sandbox",
-      finish_url: finishUrl,
-    })
+    /*
+     * ============================================================
+     * 7. TENTUKAN ORDER ID
+     * ============================================================
+     *
+     * Jika order_id lama tersedia, kita coba gunakan.
+     *
+     * Namun kalau Midtrans menolak karena order_id sudah pernah
+     * digunakan, kita generate order_id baru dan retry satu kali.
+     */
 
-    const midtransResponse = await fetch(
-      `${midtransBaseUrl}/snap/v1/transactions`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: authHeader,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          transaction_details: {
-            order_id: bill.order_id,
-            gross_amount: amount,
-          },
+    let orderId =
+      bill.order_id || generateOrderId()
 
-          item_details: [
-            {
-              id: bill.id,
-              price: amount,
-              quantity: 1,
-              name: `SPP ${student.student_name}`,
-            },
-          ],
+    /*
+     * ============================================================
+     * 8. FUNCTION UNTUK MEMBUAT TRANSAKSI MIDTRANS
+     * ============================================================
+     */
 
-          customer_details: {
-            first_name: student.student_name,
-          },
-
-          /*
-           * Finish:
-           * dipakai setelah pembayaran selesai.
-           *
-           * Unfinish:
-           * dipakai ketika user menutup / belum menyelesaikan pembayaran.
-           *
-           * Error:
-           * dipakai ketika pembayaran mengalami error.
-           *
-           * Ketiganya diarahkan kembali ke halaman detail tagihan NAGALA.
-           */
-          callbacks: {
-            finish: finishUrl,
-            unfinish: finishUrl,
-            error: finishUrl,
-          },
-        }),
-      },
-    )
-
-    let midtransData: MidtransSnapResponse
-
-    try {
-      midtransData =
-        (await midtransResponse.json()) as MidtransSnapResponse
-    } catch (parseError) {
-      console.error(
-        "Midtrans response JSON parse error:",
-        parseError,
-      )
-
-      return NextResponse.json(
+    async function createMidtransTransaction(
+      currentOrderId: string,
+    ) {
+      console.log(
+        "Creating Midtrans transaction:",
         {
-          error:
-            "Respons dari Midtrans tidak dapat diproses.",
+          bill_id: bill.id,
+          order_id: currentOrderId,
+          amount,
+          environment:
+            process.env.MIDTRANS_IS_PRODUCTION ===
+            "true"
+              ? "production"
+              : "sandbox",
+          finish_url: finishUrl,
         },
-        { status: 502 },
       )
+
+      const response = await fetch(
+        `${midtransBaseUrl}/snap/v1/transactions`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: authHeader,
+            "Content-Type":
+              "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            transaction_details: {
+              order_id: currentOrderId,
+              gross_amount: amount,
+            },
+
+            item_details: [
+              {
+                id: bill.id,
+                price: amount,
+                quantity: 1,
+                name: `SPP ${student.student_name}`,
+              },
+            ],
+
+            customer_details: {
+              first_name:
+                student.student_name,
+            },
+
+            callbacks: {
+              finish: finishUrl,
+              unfinish: finishUrl,
+              error: finishUrl,
+            },
+          }),
+        },
+      )
+
+      let data: MidtransSnapResponse
+
+      try {
+        data =
+          (await response.json()) as MidtransSnapResponse
+      } catch (parseError) {
+        console.error(
+          "Midtrans response JSON parse error:",
+          parseError,
+        )
+
+        return {
+          response,
+          data: null,
+        }
+      }
+
+      return {
+        response,
+        data,
+      }
     }
 
-    if (!midtransResponse.ok || !midtransData.token) {
-      console.error("Midtrans Snap error:", {
-        status: midtransResponse.status,
-        data: midtransData,
-      })
+    /*
+     * ============================================================
+     * 9. REQUEST PERTAMA KE MIDTRANS
+     * ============================================================
+     */
+
+    let midtransResult =
+      await createMidtransTransaction(
+        orderId,
+      )
+
+    /*
+     * ============================================================
+     * 10. HANDLE DUPLICATE ORDER ID
+     * ============================================================
+     *
+     * Kalau order_id sudah pernah digunakan di Midtrans,
+     * generate order_id baru lalu retry SATU KALI.
+     */
+
+    const duplicateOrderId =
+      midtransResult.response.status === 400 &&
+      Array.isArray(
+        midtransResult.data?.error_messages,
+      ) &&
+      midtransResult.data.error_messages.some(
+        (message) =>
+          message.includes(
+            "transaction_details.order_id has already been taken",
+          ),
+      )
+
+    if (duplicateOrderId) {
+      const oldOrderId = orderId
+
+      orderId = generateOrderId()
+
+      console.warn(
+        "Midtrans rejected duplicate order_id. Retrying with new order_id:",
+        {
+          old_order_id: oldOrderId,
+          new_order_id: orderId,
+          bill_id: bill.id,
+        },
+      )
+
+      midtransResult =
+        await createMidtransTransaction(
+          orderId,
+        )
+    }
+
+    /*
+     * ============================================================
+     * 11. VALIDASI FINAL RESPONSE MIDTRANS
+     * ============================================================
+     */
+
+    const {
+      response: midtransResponse,
+      data: midtransData,
+    } = midtransResult
+
+    if (
+      !midtransResponse.ok ||
+      !midtransData?.token
+    ) {
+      console.error(
+        "Midtrans Snap error:",
+        {
+          status:
+            midtransResponse.status,
+          data: midtransData,
+          bill_id: bill.id,
+          order_id: orderId,
+        },
+      )
+
+      const midtransMessage =
+        midtransData?.error_messages?.join(
+          ", ",
+        ) ||
+        midtransData?.status_message ||
+        "Gagal membuat transaksi pembayaran."
 
       return NextResponse.json(
         {
-          error:
-            midtransData.status_message ||
-            "Gagal membuat transaksi pembayaran.",
+          error: midtransMessage,
         },
         { status: 502 },
       )
     }
 
     /*
-     * Simpan Snap Token ke spp_bills.
+     * ============================================================
+     * 12. SIMPAN ORDER ID + SNAP TOKEN
+     * ============================================================
      *
-     * Tetap menggunakan Supabase client milik Parent
-     * karena bill sudah diverifikasi sebagai milik Parent.
+     * Penting:
+     * order_id ikut disimpan supaya database selalu sinkron
+     * dengan transaksi yang benar-benar dibuat di Midtrans.
      */
-    const { error: updateError } = await supabase
-      .from("spp_bills")
-      .update({
-        snap_token: midtransData.token,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", bill.id)
-      .eq("student_id", student.id)
+
+    const { error: updateError } =
+      await supabase
+        .from("spp_bills")
+        .update({
+          order_id: orderId,
+          snap_token:
+            midtransData.token,
+          updated_at:
+            new Date().toISOString(),
+        })
+        .eq("id", bill.id)
+        .eq(
+          "student_id",
+          student.id,
+        )
 
     if (updateError) {
-      console.error("Save Snap token error:", updateError)
+      console.error(
+        "Save Midtrans transaction data error:",
+        updateError,
+      )
 
+      /*
+       * Transaksi Midtrans SUDAH berhasil dibuat,
+       * tetapi database gagal menyimpan token.
+       */
       return NextResponse.json(
         {
           error:
-            "Transaksi berhasil dibuat, tetapi token gagal disimpan.",
+            "Transaksi berhasil dibuat, tetapi data pembayaran gagal disimpan. Silakan hubungi Founder.",
         },
         { status: 500 },
       )
     }
 
+    /*
+     * ============================================================
+     * 13. RESPONSE KE FRONTEND
+     * ============================================================
+     */
+
+    console.log(
+      "Midtrans transaction created successfully:",
+      {
+        bill_id: bill.id,
+        order_id: orderId,
+      },
+    )
+
     return NextResponse.json({
       snap_token: midtransData.token,
-      order_id: bill.order_id,
-      redirect_url: `${midtransBaseUrl}/snap/v4/redirection/${midtransData.token}`,
+      order_id: orderId,
+      redirect_url:
+        `${midtransBaseUrl}/snap/v4/redirection/${midtransData.token}`,
     })
   } catch (error) {
-    console.error("Parent finance payment POST error:", error)
+    console.error(
+      "Parent finance payment POST error:",
+      error,
+    )
 
     return NextResponse.json(
       {
