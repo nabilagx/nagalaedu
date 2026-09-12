@@ -139,15 +139,17 @@ export default function TutorSidebar({
             />
 
             {!collapsed && (
-              <div className="ml-3 min-w-0">
-                <p className="truncate text-sm font-bold text-white">
-                  NAGALA Education
-                </p>
-                <p className="truncate text-xs text-slate-400">
-                  Student Management
-                </p>
-              </div>
-            )}
+            <div className="min-w-0">
+              <p className="text-sm font-bold tracking-wide">
+                NAGALA
+              </p>
+
+              <p className="text-[10px] font-medium tracking-[0.2em] text-slate-400">
+                EDUCATION
+              </p>
+            </div>
+          )}
+
           </div>
 
           {/* Mobile Close */}
