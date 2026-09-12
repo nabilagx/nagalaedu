@@ -131,37 +131,56 @@ export default function TutorSidebar({
         ].join(" ")}
       >
         {/* Brand */}
-        <div className="flex h-20 shrink-0 items-center border-b border-white/10 px-5">
-          <div className="flex min-w-0 flex-1 items-center">
-            <NagalaLogo
-              size="md"
-              rounded="md"
-            />
-
-            {!collapsed && (
-            <div className="min-w-0">
-              <p className="text-sm font-bold tracking-wide">
-                NAGALA
-              </p>
-
-              <p className="text-[10px] font-medium tracking-[0.2em] text-slate-400">
-                EDUCATION
-              </p>
-            </div>
-          )}
-
-          </div>
-
-          {/* Mobile Close */}
-          <button
-            type="button"
-            onClick={onCloseMobile}
-            aria-label="Tutup sidebar"
-            className="ml-2 rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white lg:hidden"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+        <div
+                  className={`
+                    flex
+                    h-20
+                    shrink-0
+                    items-center
+                    border-b
+                    border-white/10
+                    ${
+                      collapsed
+                        ? 'lg:justify-center lg:px-3'
+                        : 'gap-3 px-5'
+                    }
+                  `}
+                >
+                  <NagalaLogo
+                    size="md"
+                    rounded="md"
+                  />
+        
+                  {!collapsed && (
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold tracking-wide">
+                        NAGALA
+                      </p>
+        
+                      <p className="text-[10px] font-medium tracking-[0.2em] text-slate-400">
+                        EDUCATION
+                      </p>
+                    </div>
+                  )}
+        
+                  {/* CLOSE MOBILE */}
+                  <button
+                    type="button"
+                    onClick={onCloseMobile}
+                    aria-label="Tutup menu"
+                    className="
+                      ml-auto
+                      rounded-lg
+                      p-2
+                      text-slate-400
+                      hover:bg-white/10
+                      hover:text-white
+                      lg:hidden
+                    "
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
 
         {/* Navigation */}
         <nav
