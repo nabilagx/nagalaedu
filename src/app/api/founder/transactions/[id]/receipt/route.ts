@@ -784,7 +784,7 @@ export async function GET(
 
     centerText(
       transaction.signature_verified
-        ? '✓ PEMBAYARAN TERVERIFIKASI'
+        ? 'PEMBAYARAN TERVERIFIKASI'
         : 'PEMBAYARAN TERVERIFIKASI',
       8,
       boldFont,
