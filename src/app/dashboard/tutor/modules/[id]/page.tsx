@@ -1,11 +1,13 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
+  AlertCircle,
   ArrowLeft,
   BookOpen,
   CalendarDays,
+  CheckCircle2,
   ExternalLink,
   FileText,
   GraduationCap,
@@ -14,6 +16,7 @@ import {
   RefreshCw,
   Save,
   Trash2,
+  X,
   XCircle,
 } from "lucide-react"
 
@@ -44,6 +47,11 @@ type ModuleData = {
   module: ModuleDetail
 }
 
+type Notification = {
+  type: "success" | "error"
+  message: string
+}
+
 export default function TutorModuleDetailPage({
   params,
 }: {
@@ -51,29 +59,15 @@ export default function TutorModuleDetailPage({
     id: string
   }>
 }) {
-  const [moduleId, setModuleId] =
-    useState("")
-
-  const [data, setData] =
-    useState<ModuleData | null>(null)
-
-  const [loading, setLoading] =
-    useState(true)
-
-  const [refreshing, setRefreshing] =
-    useState(false)
-
-  const [error, setError] =
-    useState("")
-
-  const [editing, setEditing] =
-    useState(false)
-
-  const [saving, setSaving] =
-    useState(false)
-
-  const [deleting, setDeleting] =
-    useState(false)
+  const [moduleId, setModuleId] = useState("")
+  const [data, setData] = useState<ModuleData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState("")
+  const [editing, setEditing] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [showDelete, setShowDelete] = useState(false)
 
   const [form, setForm] = useState({
     class_id: "",
@@ -82,11 +76,50 @@ export default function TutorModuleDetailPage({
     file_url: "",
   })
 
-  const [classes, setClasses] =
-    useState<ModuleClass[]>([])
+  const [classes, setClasses] = useState<ModuleClass[]>([])
 
-  const [actionError, setActionError] =
-    useState("")
+  const [notification, setNotification] =
+    useState<Notification | null>(null)
+
+  const notificationTimeoutRef = useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null)
+
+  function showNotification(
+    type: "success" | "error",
+    message: string
+  ) {
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current)
+    }
+
+    setNotification({
+      type,
+      message,
+    })
+
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification(null)
+      notificationTimeoutRef.current = null
+    }, 3500)
+  }
+
+  function closeNotification() {
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current)
+      notificationTimeoutRef.current = null
+    }
+
+    setNotification(null)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     async function resolveParams() {
@@ -113,15 +146,14 @@ export default function TutorModuleDetailPage({
       setError("")
 
       const response = await fetch(
-        `/api/tutor/modules/${id}`,
+        `/api/tutor/modules/${encodeURIComponent(id)}`,
         {
           method: "GET",
           cache: "no-store",
         }
       )
 
-      const result =
-        await response.json()
+      const result = await response.json()
 
       if (!response.ok) {
         throw new Error(
@@ -133,35 +165,29 @@ export default function TutorModuleDetailPage({
       setData(result)
 
       setForm({
-        class_id:
-          result.module.class_id,
-        title:
-          result.module.title,
+        class_id: result.module.class_id,
+        title: result.module.title,
         description:
-          result.module.description ??
-          "",
+          result.module.description ?? "",
         file_url:
-          result.module.file_url ??
-          "",
+          result.module.file_url ?? "",
       })
 
       // Ambil kelas tutor untuk dropdown edit
-      const classesResponse =
-        await fetch(
-          "/api/tutor/modules",
-          {
-            method: "GET",
-            cache: "no-store",
-          }
-        )
+      const classesResponse = await fetch(
+        "/api/tutor/modules",
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      )
 
       if (classesResponse.ok) {
         const classesResult =
           await classesResponse.json()
 
         setClasses(
-          classesResult.classes ??
-            []
+          classesResult.classes ?? []
         )
       }
     } catch (err) {
@@ -185,19 +211,13 @@ export default function TutorModuleDetailPage({
   function startEditing() {
     if (!data) return
 
-    setActionError("")
-
     setForm({
-      class_id:
-        data.module.class_id,
-      title:
-        data.module.title,
+      class_id: data.module.class_id,
+      title: data.module.title,
       description:
-        data.module.description ??
-        "",
+        data.module.description ?? "",
       file_url:
-        data.module.file_url ??
-        "",
+        data.module.file_url ?? "",
     })
 
     setEditing(true)
@@ -210,30 +230,26 @@ export default function TutorModuleDetailPage({
 
     try {
       setSaving(true)
-      setActionError("")
 
       const response = await fetch(
-        `/api/tutor/modules/${moduleId}`,
+        `/api/tutor/modules/${encodeURIComponent(
+          moduleId
+        )}`,
         {
           method: "PATCH",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            class_id:
-              form.class_id,
+            class_id: form.class_id,
             title: form.title,
-            description:
-              form.description,
-            file_url:
-              form.file_url,
+            description: form.description,
+            file_url: form.file_url,
           }),
         }
       )
 
-      const result =
-        await response.json()
+      const result = await response.json()
 
       if (!response.ok) {
         throw new Error(
@@ -245,38 +261,43 @@ export default function TutorModuleDetailPage({
       setEditing(false)
 
       await loadModule(moduleId)
+
+      showNotification(
+        "success",
+        "Modul berhasil diperbarui."
+      )
     } catch (err) {
-      setActionError(
+      const message =
         err instanceof Error
           ? err.message
           : "Gagal memperbarui modul."
-      )
+
+      showNotification("error", message)
     } finally {
       setSaving(false)
     }
   }
 
+  function openDelete() {
+    if (deleting) return
+
+    setShowDelete(true)
+  }
+
   async function handleDelete() {
-    const confirmed =
-      window.confirm(
-        `Hapus modul "${data?.module.title}"? Tindakan ini tidak dapat dibatalkan.`
-      )
-
-    if (!confirmed) return
-
     try {
       setDeleting(true)
-      setActionError("")
 
       const response = await fetch(
-        `/api/tutor/modules/${moduleId}`,
+        `/api/tutor/modules/${encodeURIComponent(
+          moduleId
+        )}`,
         {
           method: "DELETE",
         }
       )
 
-      const result =
-        await response.json()
+      const result = await response.json()
 
       if (!response.ok) {
         throw new Error(
@@ -285,15 +306,25 @@ export default function TutorModuleDetailPage({
         )
       }
 
-      window.location.href =
-        "/dashboard/tutor/modules"
+      setShowDelete(false)
+
+      showNotification(
+        "success",
+        "Modul berhasil dihapus."
+      )
+
+      // Beri waktu toast terlihat sebelum redirect.
+      setTimeout(() => {
+        window.location.href =
+          "/dashboard/tutor/modules"
+      }, 800)
     } catch (err) {
-      setActionError(
+      const message =
         err instanceof Error
           ? err.message
           : "Gagal menghapus modul."
-      )
-    } finally {
+
+      showNotification("error", message)
       setDeleting(false)
     }
   }
@@ -333,9 +364,7 @@ export default function TutorModuleDetailPage({
                   <button
                     type="button"
                     onClick={() =>
-                      loadModule(
-                        moduleId
-                      )
+                      loadModule(moduleId)
                     }
                     className="rounded-xl bg-[#E53935] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#D32F2F]"
                   >
@@ -363,6 +392,54 @@ export default function TutorModuleDetailPage({
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
+
+      {/* TOAST */}
+      {notification && (
+        <div
+          className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm"
+          aria-live="polite"
+        >
+          <div
+            className={`rounded-2xl border bg-white p-4 shadow-xl ${
+              notification.type === "success"
+                ? "border-emerald-200"
+                : "border-red-200"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 shrink-0">
+                {notification.type === "success" ? (
+                  <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                ) : (
+                  <XCircle className="h-5 w-5 text-red-600" />
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-gray-900">
+                  {notification.type === "success"
+                    ? "Berhasil"
+                    : "Gagal"}
+                </p>
+
+                <p className="mt-1 text-sm leading-5 text-gray-600">
+                  {notification.message}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={closeNotification}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                aria-label="Tutup notifikasi"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mx-auto max-w-5xl space-y-6">
 
         {/* HEADER */}
@@ -407,23 +484,18 @@ export default function TutorModuleDetailPage({
             <button
               type="button"
               onClick={() =>
-                loadModule(
-                  moduleId,
-                  true
-                )
+                loadModule(moduleId, true)
               }
               disabled={refreshing}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-[#111827] shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
             >
               <RefreshCw
                 className={`h-4 w-4 ${
-                  refreshing
-                    ? "animate-spin"
-                    : ""
+                  refreshing ? "animate-spin" : ""
                 }`}
               />
 
-              Refresh
+              Perbarui Data
             </button>
 
             <button
@@ -437,7 +509,7 @@ export default function TutorModuleDetailPage({
 
             <button
               type="button"
-              onClick={handleDelete}
+              onClick={openDelete}
               disabled={deleting}
               className="inline-flex items-center gap-2 rounded-xl bg-[#E53935] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#D32F2F] disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -447,25 +519,10 @@ export default function TutorModuleDetailPage({
                 <Trash2 className="h-4 w-4" />
               )}
 
-              {deleting
-                ? "Menghapus..."
-                : "Hapus"}
+              {deleting ? "Menghapus..." : "Hapus"}
             </button>
           </div>
         </div>
-
-        {/* ERROR */}
-        {actionError && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-            <div className="flex items-start gap-3">
-              <XCircle className="h-5 w-5 shrink-0 text-red-600" />
-
-              <p className="text-sm text-red-700">
-                {actionError}
-              </p>
-            </div>
-          </div>
-        )}
 
         {/* EDIT FORM */}
         {editing ? (
@@ -490,36 +547,25 @@ export default function TutorModuleDetailPage({
                 </label>
 
                 <select
-                  value={
-                    form.class_id
-                  }
+                  value={form.class_id}
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      class_id:
-                        event.target
-                          .value,
+                      class_id: event.target.value,
                     })
                   }
                   required
                   className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-[#111827] outline-none focus:border-[#E53935] focus:bg-white focus:ring-2 focus:ring-red-100"
                 >
-                  {classes.map(
-                    (item) => (
-                      <option
-                        key={item.id}
-                        value={item.id}
-                      >
-                        {
-                          item.class_name
-                        }{" "}
-                        —{" "}
-                        {
-                          item.subject
-                        }
-                      </option>
-                    )
-                  )}
+                  {classes.map((item) => (
+                    <option
+                      key={item.id}
+                      value={item.id}
+                    >
+                      {item.class_name} —{" "}
+                      {item.subject}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -534,9 +580,7 @@ export default function TutorModuleDetailPage({
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      title:
-                        event.target
-                          .value,
+                      title: event.target.value,
                     })
                   }
                   required
@@ -550,15 +594,12 @@ export default function TutorModuleDetailPage({
                 </label>
 
                 <textarea
-                  value={
-                    form.description
-                  }
+                  value={form.description}
                   onChange={(event) =>
                     setForm({
                       ...form,
                       description:
-                        event.target
-                          .value,
+                        event.target.value,
                     })
                   }
                   rows={5}
@@ -570,21 +611,17 @@ export default function TutorModuleDetailPage({
                 <label className="mb-1.5 block text-sm font-semibold text-[#111827]">
                   Link Materi
                   <span className="ml-1 font-normal text-slate-400">
-                    (opsional)
+                    (wajib)
                   </span>
                 </label>
 
                 <input
                   type="url"
-                  value={
-                    form.file_url
-                  }
+                  value={form.file_url}
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      file_url:
-                        event.target
-                          .value,
+                      file_url: event.target.value,
                     })
                   }
                   placeholder="https://..."
@@ -596,9 +633,7 @@ export default function TutorModuleDetailPage({
             <div className="mt-5 flex justify-end gap-2 border-t border-slate-100 pt-4">
               <button
                 type="button"
-                onClick={() =>
-                  setEditing(false)
-                }
+                onClick={() => setEditing(false)}
                 disabled={saving}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
               >
@@ -637,9 +672,7 @@ export default function TutorModuleDetailPage({
 
                 {module.description ? (
                   <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-600">
-                    {
-                      module.description
-                    }
+                    {module.description}
                   </p>
                 ) : (
                   <p className="mt-4 text-sm text-slate-400">
@@ -651,9 +684,7 @@ export default function TutorModuleDetailPage({
               {module.file_url && (
                 <div className="border-t border-slate-100 bg-slate-50 p-5 sm:p-6">
                   <a
-                    href={
-                      module.file_url
-                    }
+                    href={module.file_url}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-2 rounded-xl bg-[#111827] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800"
@@ -685,35 +716,23 @@ export default function TutorModuleDetailPage({
 
                   <div className="min-w-0">
                     <h3 className="font-bold text-[#111827]">
-                      {
-                        module.class
-                          .class_name
-                      }
+                      {module.class.class_name}
                     </h3>
 
                     <p className="mt-1 text-sm text-slate-500">
-                      {
-                        module.class
-                          .subject
-                      }
+                      {module.class.subject}
                     </p>
 
-                    {module.class
-                      .description && (
+                    {module.class.description && (
                       <p className="mt-3 text-sm leading-6 text-slate-500">
-                        {
-                          module.class
-                            .description
-                        }
+                        {module.class.description}
                       </p>
                     )}
                   </div>
                 </div>
 
-                {(module.class
-                  .schedule_day ||
-                  module.class
-                    .schedule_start) && (
+                {(module.class.schedule_day ||
+                  module.class.schedule_start) && (
                   <div className="mt-5 flex items-center gap-3 rounded-xl bg-slate-50 p-4">
                     <CalendarDays className="h-5 w-5 shrink-0 text-[#E53935]" />
 
@@ -723,19 +742,13 @@ export default function TutorModuleDetailPage({
                       </p>
 
                       <p className="mt-0.5 text-sm font-semibold text-[#111827]">
-                        {
-                          module.class
-                            .schedule_day
-                        }{" "}
-                        {module.class
-                          .schedule_start &&
+                        {module.class.schedule_day}{" "}
+                        {module.class.schedule_start &&
                           `• ${module.class.schedule_start.slice(
                             0,
                             5
                           )}`}
-
-                        {module.class
-                          .schedule_end &&
+                        {module.class.schedule_end &&
                           ` - ${module.class.schedule_end.slice(
                             0,
                             5
@@ -759,9 +772,7 @@ export default function TutorModuleDetailPage({
 
                   <p className="mt-1 text-sm leading-6 text-blue-800">
                     Modul ini dibuat pada{" "}
-                    {formatDate(
-                      module.created_at
-                    )}
+                    {formatDate(module.created_at)}
                     {module.updated_at !==
                       module.created_at &&
                       ` dan terakhir diperbarui pada ${formatDate(
@@ -775,22 +786,75 @@ export default function TutorModuleDetailPage({
           </>
         )}
       </div>
+
+      {/* DELETE CONFIRMATION */}
+      {showDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+            <div className="px-5 py-5">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+                <Trash2 className="h-5 w-5 text-red-600" />
+              </div>
+
+              <div className="mt-4 text-center">
+                <h2 className="text-lg font-bold text-gray-900">
+                  Hapus Modul?
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-gray-500">
+                  Modul{" "}
+                  <span className="font-semibold text-gray-700">
+                    {module.title}
+                  </span>{" "}
+                  akan dihapus. Tindakan ini tidak dapat
+                  dibatalkan.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 border-t border-gray-100 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => setShowDelete(false)}
+                disabled={deleting}
+                className="flex-1 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Batal
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Menghapus...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Hapus
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function formatDate(
-  value: string
-) {
+function formatDate(value: string) {
   try {
-    return new Intl.DateTimeFormat(
-      "id-ID",
-      {
-        day: "numeric",
-        month: "long",
-        year: "numeric",
-      }
-    ).format(new Date(value))
+    return new Intl.DateTimeFormat("id-ID", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(new Date(value))
   } catch {
     return value
   }

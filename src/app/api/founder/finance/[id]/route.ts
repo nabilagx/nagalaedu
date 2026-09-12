@@ -6,43 +6,127 @@ import { createAdminClient } from '@/lib/supabase/admin'
 const MIN_BILL_AMOUNT = 1_000
 const MAX_BILL_AMOUNT = 1_000_000
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const MONTH_REGEX = /^(\d{4})-(0[1-9]|1[0-2])$/
+
+function json(
+  body: unknown,
+  status = 200,
+) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      'Cache-Control': 'private, no-store',
+    },
+  })
+}
+
+function isPlainObject(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  )
+}
+
+function isValidUUID(value: string) {
+  return UUID_REGEX.test(value)
+}
+
 function getCurrentMonthStart() {
   const now = new Date()
 
+  const jakartaParts = new Intl.DateTimeFormat(
+    'en-US',
+    {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+    },
+  ).formatToParts(now)
+
+  const year = Number(
+    jakartaParts.find(
+      (part) => part.type === 'year',
+    )?.value,
+  )
+
+  const month = Number(
+    jakartaParts.find(
+      (part) => part.type === 'month',
+    )?.value,
+  )
+
   return new Date(
     Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
+      year,
+      month - 1,
       1,
     ),
   )
 }
 
-function normalizeMonthPeriod(value: unknown) {
-  if (typeof value !== 'string') return null
+function normalizeMonthPeriod(
+  value: unknown,
+) {
+  if (typeof value !== 'string') {
+    return null
+  }
 
-  const match = /^(\d{4})-(\d{2})$/.exec(value)
+  const match =
+    MONTH_REGEX.exec(value)
 
-  if (!match) return null
+  if (!match) {
+    return null
+  }
 
   const year = Number(match[1])
   const month = Number(match[2])
 
-  if (month < 1 || month > 12) return null
-
-  return new Date(Date.UTC(year, month - 1, 1))
-}
-
-function isCurrentMonth(date: Date) {
-  const current = getCurrentMonthStart()
-
-  return (
-    date.getUTCFullYear() === current.getUTCFullYear() &&
-    date.getUTCMonth() === current.getUTCMonth()
+  return new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      1,
+    ),
   )
 }
 
-// GET
+function isCurrentMonth(
+  date: Date,
+) {
+  const current =
+    getCurrentMonthStart()
+
+  return (
+    date.getUTCFullYear() ===
+      current.getUTCFullYear() &&
+    date.getUTCMonth() ===
+      current.getUTCMonth()
+  )
+}
+
+async function getId(
+  context: {
+    params: Promise<{
+      id: string
+    }>
+  },
+) {
+  const { id } =
+    await context.params
+
+  return id.trim()
+}
+
+/* =========================================================
+   GET DETAIL
+========================================================= */
+
 export async function GET(
   request: NextRequest,
   context: {
@@ -51,161 +135,206 @@ export async function GET(
     }>
   },
 ) {
-  const auth = await requireFounder()
+  const auth =
+    await requireFounder()
 
   if (!auth.authorized) {
     return auth.response
   }
 
-  const { id } = await context.params
+  const id =
+    await getId(context)
 
-  const admin = createAdminClient()
-
-  const {
-    data: bill,
-    error: billError,
-  } = await admin
-    .from('spp_bills')
-    .select(`
-      id,
-      student_id,
-      order_id,
-      month_period,
-      amount,
-      payment_status,
-      snap_token,
-      paid_at,
-      created_at
-    `)
-    .eq('id', id)
-    .maybeSingle()
-
-  if (billError) {
-    console.error('GET FINANCE DETAIL ERROR:', billError)
-
-    return NextResponse.json(
+  if (!isValidUUID(id)) {
+    return json(
       {
-        error: 'Gagal mengambil detail tagihan.',
+        error:
+          'ID tagihan tidak valid.',
       },
-      { status: 500 },
+      400,
     )
   }
 
-  if (!bill) {
-    return NextResponse.json(
-      {
-        error: 'Tagihan tidak ditemukan.',
-      },
-      { status: 404 },
-    )
-  }
+  try {
+    const admin =
+      createAdminClient()
 
-  const {
-    data: student,
-    error: studentError,
-  } = await admin
-    .from('students')
-    .select(`
-      id,
-      student_name,
-      grade_level,
-      school_name,
-      phone_number,
-      status,
-      parent_id
-    `)
-    .eq('id', bill.student_id)
-    .maybeSingle()
-
-  if (studentError) {
-    console.error(
-      'GET FINANCE DETAIL STUDENT ERROR:',
-      studentError,
-    )
-
-    return NextResponse.json(
-      {
-        error: 'Gagal mengambil data siswa.',
-      },
-      { status: 500 },
-    )
-  }
-
-  let parent = null
-
-  if (student?.parent_id) {
     const {
-      data: parentData,
-      error: parentError,
+      data: bill,
+      error: billError,
     } = await admin
-      .from('profiles')
+      .from('spp_bills')
       .select(`
         id,
-        full_name,
-        phone_number
+        student_id,
+        order_id,
+        month_period,
+        amount,
+        payment_status,
+        paid_at,
+        created_at
       `)
-      .eq('id', student.parent_id)
+      .eq('id', id)
       .maybeSingle()
 
-    if (parentError) {
+    if (billError) {
       console.error(
-        'GET FINANCE DETAIL PARENT ERROR:',
-        parentError,
+        'GET FINANCE DETAIL ERROR:',
+        billError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal mengambil data orang tua.',
+          error:
+            'Gagal mengambil detail tagihan.',
         },
-        { status: 500 },
+        500,
       )
     }
 
-    parent = parentData
-  }
+    if (!bill) {
+      return json(
+        {
+          error:
+            'Tagihan tidak ditemukan.',
+        },
+        404,
+      )
+    }
 
-  const {
-    data: transactions,
-    error: transactionError,
-  } = await admin
-    .from('payment_transactions')
-    .select(`
-      id,
-      transaction_id,
-      transaction_status,
-      payment_type,
-      gross_amount,
-      transaction_time,
-      settlement_time,
-      signature_verified,
-      created_at
-    `)
-    .eq('spp_bill_id', id)
-    .order('created_at', { ascending: false })
+    const {
+      data: student,
+      error: studentError,
+    } = await admin
+      .from('students')
+      .select(`
+        id,
+        student_name,
+        grade_level,
+        school_name,
+        phone_number,
+        status,
+        parent_id
+      `)
+      .eq('id', bill.student_id)
+      .maybeSingle()
 
-  if (transactionError) {
+    if (studentError) {
+      console.error(
+        'GET FINANCE DETAIL STUDENT ERROR:',
+        studentError,
+      )
+
+      return json(
+        {
+          error:
+            'Gagal mengambil data siswa.',
+        },
+        500,
+      )
+    }
+
+    let parent: {
+      id: string
+      full_name: string | null
+      phone_number: string | null
+    } | null = null
+
+    if (student?.parent_id) {
+      const {
+        data: parentData,
+        error: parentError,
+      } = await admin
+        .from('profiles')
+        .select(`
+          id,
+          full_name,
+          phone_number
+        `)
+        .eq('id', student.parent_id)
+        .maybeSingle()
+
+      if (parentError) {
+        console.error(
+          'GET FINANCE DETAIL PARENT ERROR:',
+          parentError,
+        )
+
+        return json(
+          {
+            error:
+              'Gagal mengambil data orang tua.',
+          },
+          500,
+        )
+      }
+
+      parent = parentData
+    }
+
+    const {
+      data: transactions,
+      error: transactionError,
+    } = await admin
+      .from('payment_transactions')
+      .select(`
+        id,
+        transaction_id,
+        transaction_status,
+        payment_type,
+        gross_amount,
+        transaction_time,
+        settlement_time,
+        signature_verified,
+        created_at
+      `)
+      .eq('spp_bill_id', id)
+      .order('created_at', {
+        ascending: false,
+      })
+
+    if (transactionError) {
+      console.error(
+        'GET FINANCE TRANSACTIONS ERROR:',
+        transactionError,
+      )
+
+      return json(
+        {
+          error:
+            'Gagal mengambil riwayat transaksi.',
+        },
+        500,
+      )
+    }
+
+    return json({
+      bill,
+      student,
+      parent,
+      transactions:
+        transactions ?? [],
+    })
+  } catch (error) {
     console.error(
-      'GET FINANCE TRANSACTIONS ERROR:',
-      transactionError,
+      'GET FINANCE DETAIL UNEXPECTED ERROR:',
+      error,
     )
 
-    return NextResponse.json(
+    return json(
       {
-        error: 'Gagal mengambil riwayat transaksi.',
+        error:
+          'Terjadi kesalahan pada server.',
       },
-      { status: 500 },
+      500,
     )
   }
-
-  return NextResponse.json({
-    bill,
-    student,
-    parent,
-    transactions: transactions ?? [],
-  })
 }
 
-// PATCH
+/* =========================================================
+   PATCH
+========================================================= */
+
 export async function PATCH(
   request: NextRequest,
   context: {
@@ -214,18 +343,66 @@ export async function PATCH(
     }>
   },
 ) {
-  const auth = await requireFounder()
+  const auth =
+    await requireFounder()
 
   if (!auth.authorized) {
     return auth.response
   }
 
-  const { id } = await context.params
+  const id =
+    await getId(context)
+
+  if (!isValidUUID(id)) {
+    return json(
+      {
+        error:
+          'ID tagihan tidak valid.',
+      },
+      400,
+    )
+  }
 
   try {
-    const body = await request.json()
+    const body: unknown =
+      await request.json()
 
-    const admin = createAdminClient()
+    if (!isPlainObject(body)) {
+      return json(
+        {
+          error:
+            'Format data tidak valid.',
+        },
+        400,
+      )
+    }
+
+    const allowedKeys = [
+      'amount',
+      'monthPeriod',
+    ]
+
+    const bodyKeys =
+      Object.keys(body)
+
+    const hasUnknownField =
+      bodyKeys.some(
+        (key) =>
+          !allowedKeys.includes(key),
+      )
+
+    if (hasUnknownField) {
+      return json(
+        {
+          error:
+            'Terdapat field yang tidak diizinkan.',
+        },
+        400,
+      )
+    }
+
+    const admin =
+      createAdminClient()
 
     const {
       data: currentBill,
@@ -248,31 +425,35 @@ export async function PATCH(
         currentBillError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal memeriksa tagihan.',
+          error:
+            'Gagal memeriksa tagihan.',
         },
-        { status: 500 },
+        500,
       )
     }
 
     if (!currentBill) {
-      return NextResponse.json(
+      return json(
         {
-          error: 'Tagihan tidak ditemukan.',
+          error:
+            'Tagihan tidak ditemukan.',
         },
-        { status: 404 },
+        404,
       )
     }
 
-    // PAID tidak boleh diedit oleh Founder.
-    if (currentBill.payment_status === 'PAID') {
-      return NextResponse.json(
+    if (
+      currentBill.payment_status ===
+      'PAID'
+    ) {
+      return json(
         {
           error:
             'Tagihan yang sudah PAID tidak dapat diubah.',
         },
-        { status: 400 },
+        400,
       )
     }
 
@@ -281,75 +462,100 @@ export async function PATCH(
       month_period?: string
     } = {}
 
-    if (body.amount !== undefined) {
-      const amount = Number(body.amount)
+    if (
+      Object.prototype.hasOwnProperty.call(
+        body,
+        'amount',
+      )
+    ) {
+      const rawAmount =
+        body.amount
 
-      if (!Number.isFinite(amount)) {
-        return NextResponse.json(
-          {
-            error: 'Nominal tagihan tidak valid.',
-          },
-          { status: 400 },
+      if (
+        typeof rawAmount !==
+          'number' ||
+        !Number.isSafeInteger(
+          rawAmount,
         )
-      }
-
-      if (!Number.isInteger(amount)) {
-        return NextResponse.json(
+      ) {
+        return json(
           {
             error:
               'Nominal tagihan harus berupa angka bulat.',
           },
-          { status: 400 },
+          400,
         )
       }
 
-      if (amount < MIN_BILL_AMOUNT) {
-        return NextResponse.json(
+      if (
+        rawAmount <
+        MIN_BILL_AMOUNT
+      ) {
+        return json(
           {
-            error:
-              `Nominal minimal Rp${MIN_BILL_AMOUNT.toLocaleString('id-ID')}.`,
+            error: `Nominal minimal Rp${MIN_BILL_AMOUNT.toLocaleString(
+              'id-ID',
+            )}.`,
           },
-          { status: 400 },
+          400,
         )
       }
 
-      if (amount > MAX_BILL_AMOUNT) {
-        return NextResponse.json(
+      if (
+        rawAmount >
+        MAX_BILL_AMOUNT
+      ) {
+        return json(
           {
-            error:
-              `Nominal maksimal Rp${MAX_BILL_AMOUNT.toLocaleString('id-ID')} per tagihan.`,
+            error: `Nominal maksimal Rp${MAX_BILL_AMOUNT.toLocaleString(
+              'id-ID',
+            )} per tagihan.`,
           },
-          { status: 400 },
+          400,
         )
       }
 
-      updateData.amount = amount
+      updateData.amount =
+        rawAmount
     }
 
-    if (body.monthPeriod !== undefined) {
+    if (
+      Object.prototype.hasOwnProperty.call(
+        body,
+        'monthPeriod',
+      )
+    ) {
       const monthPeriod =
-        normalizeMonthPeriod(body.monthPeriod)
+        normalizeMonthPeriod(
+          body.monthPeriod,
+        )
 
       if (!monthPeriod) {
-        return NextResponse.json(
+        return json(
           {
-            error: 'Periode tagihan tidak valid.',
+            error:
+              'Periode tagihan tidak valid.',
           },
-          { status: 400 },
+          400,
         )
       }
 
-      if (!isCurrentMonth(monthPeriod)) {
-        return NextResponse.json(
+      if (
+        !isCurrentMonth(
+          monthPeriod,
+        )
+      ) {
+        return json(
           {
             error:
               'Periode tagihan hanya boleh untuk bulan berjalan.',
           },
-          { status: 400 },
+          400,
         )
       }
 
-      const monthStart = monthPeriod.toISOString()
+      const monthStart =
+        monthPeriod.toISOString()
 
       const {
         data: duplicateBill,
@@ -357,8 +563,14 @@ export async function PATCH(
       } = await admin
         .from('spp_bills')
         .select('id')
-        .eq('student_id', currentBill.student_id)
-        .eq('month_period', monthStart)
+        .eq(
+          'student_id',
+          currentBill.student_id,
+        )
+        .eq(
+          'month_period',
+          monthStart,
+        )
         .neq('id', id)
         .maybeSingle()
 
@@ -368,37 +580,49 @@ export async function PATCH(
           duplicateError,
         )
 
-        return NextResponse.json(
+        return json(
           {
             error:
               'Gagal memeriksa tagihan duplikat.',
           },
-          { status: 500 },
+          500,
         )
       }
 
       if (duplicateBill) {
-        return NextResponse.json(
+        return json(
           {
             error:
               'Siswa tersebut sudah memiliki tagihan pada bulan tersebut.',
           },
-          { status: 409 },
+          409,
         )
       }
 
-      updateData.month_period = monthStart
+      updateData.month_period =
+        monthStart
     }
 
-    if (Object.keys(updateData).length === 0) {
-      return NextResponse.json(
+    if (
+      Object.keys(updateData)
+        .length === 0
+    ) {
+      return json(
         {
-          error: 'Tidak ada data yang dapat diperbarui.',
+          error:
+            'Tidak ada data yang dapat diperbarui.',
         },
-        { status: 400 },
+        400,
       )
     }
 
+    /*
+     * payment_status sengaja TIDAK
+     * dimasukkan ke updateData.
+     *
+     * Founder hanya boleh mengubah
+     * nominal/periode.
+     */
     const {
       data: updatedBill,
       error: updateError,
@@ -406,6 +630,7 @@ export async function PATCH(
       .from('spp_bills')
       .update(updateData)
       .eq('id', id)
+      .neq('payment_status', 'PAID')
       .select(`
         id,
         student_id,
@@ -413,11 +638,10 @@ export async function PATCH(
         month_period,
         amount,
         payment_status,
-        snap_token,
         paid_at,
         created_at
       `)
-      .single()
+      .maybeSingle()
 
     if (updateError) {
       console.error(
@@ -425,31 +649,68 @@ export async function PATCH(
         updateError,
       )
 
-      return NextResponse.json(
+      if (
+        updateError.code ===
+        '23505'
+      ) {
+        return json(
+          {
+            error:
+              'Siswa tersebut sudah memiliki tagihan pada bulan tersebut.',
+          },
+          409,
+        )
+      }
+
+      return json(
         {
-          error: 'Gagal memperbarui tagihan.',
+          error:
+            'Gagal memperbarui tagihan.',
         },
-        { status: 500 },
+        500,
       )
     }
 
-    return NextResponse.json({
-      message: 'Tagihan berhasil diperbarui.',
+    /*
+     * Jika PAID berubah tepat saat request,
+     * conditional update di atas membuat
+     * affected row = 0.
+     */
+    if (!updatedBill) {
+      return json(
+        {
+          error:
+            'Tagihan sudah tidak dapat diubah.',
+        },
+        409,
+      )
+    }
+
+    return json({
+      message:
+        'Tagihan berhasil diperbarui.',
       bill: updatedBill,
     })
   } catch (error) {
-    console.error('PATCH FINANCE ERROR:', error)
+    console.error(
+      'PATCH FINANCE ERROR:',
+      error,
+    )
 
-    return NextResponse.json(
+    return json(
       {
-        error: 'Format data tidak valid.',
+        error:
+          'Format data tidak valid.',
       },
-      { status: 400 },
+      400,
     )
   }
 }
 
-// DELETE
+/* =========================================================
+   DELETE
+========================================================= */
+
 export async function DELETE(
   request: NextRequest,
   context: {
@@ -458,114 +719,195 @@ export async function DELETE(
     }>
   },
 ) {
-  const auth = await requireFounder()
+  const auth =
+    await requireFounder()
 
   if (!auth.authorized) {
     return auth.response
   }
 
-  const { id } = await context.params
+  const id =
+    await getId(context)
 
-  const admin = createAdminClient()
-
-  const {
-    data: bill,
-    error: billError,
-  } = await admin
-    .from('spp_bills')
-    .select(`
-      id,
-      payment_status
-    `)
-    .eq('id', id)
-    .maybeSingle()
-
-  if (billError) {
-    console.error(
-      'DELETE BILL CHECK ERROR:',
-      billError,
-    )
-
-    return NextResponse.json(
-      {
-        error: 'Gagal memeriksa tagihan.',
-      },
-      { status: 500 },
-    )
-  }
-
-  if (!bill) {
-    return NextResponse.json(
-      {
-        error: 'Tagihan tidak ditemukan.',
-      },
-      { status: 404 },
-    )
-  }
-
-  if (bill.payment_status === 'PAID') {
-    return NextResponse.json(
+  if (!isValidUUID(id)) {
+    return json(
       {
         error:
-          'Tagihan yang sudah PAID tidak boleh dihapus.',
+          'ID tagihan tidak valid.',
       },
-      { status: 400 },
+      400,
     )
   }
 
-  const {
-    data: transactions,
-    error: transactionError,
-  } = await admin
-    .from('payment_transactions')
-    .select('id')
-    .eq('spp_bill_id', id)
-    .limit(1)
+  try {
+    const admin =
+      createAdminClient()
 
-  if (transactionError) {
-    console.error(
-      'DELETE BILL TRANSACTION CHECK ERROR:',
-      transactionError,
-    )
+    const {
+      data: bill,
+      error: billError,
+    } = await admin
+      .from('spp_bills')
+      .select(`
+        id,
+        payment_status
+      `)
+      .eq('id', id)
+      .maybeSingle()
 
-    return NextResponse.json(
-      {
-        error: 'Gagal memeriksa transaksi.',
-      },
-      { status: 500 },
-    )
-  }
+    if (billError) {
+      console.error(
+        'DELETE BILL CHECK ERROR:',
+        billError,
+      )
 
-  if ((transactions ?? []).length > 0) {
-    return NextResponse.json(
-      {
-        error:
-          'Tagihan tidak dapat dihapus karena sudah memiliki riwayat transaksi.',
-      },
-      { status: 400 },
-    )
-  }
+      return json(
+        {
+          error:
+            'Gagal memeriksa tagihan.',
+        },
+        500,
+      )
+    }
 
-  const { error: deleteError } = await admin
-    .from('spp_bills')
-    .delete()
-    .eq('id', id)
+    if (!bill) {
+      return json(
+        {
+          error:
+            'Tagihan tidak ditemukan.',
+        },
+        404,
+      )
+    }
 
-  if (deleteError) {
+    if (
+      bill.payment_status ===
+      'PAID'
+    ) {
+      return json(
+        {
+          error:
+            'Tagihan yang sudah PAID tidak boleh dihapus.',
+        },
+        400,
+      )
+    }
+
+    const {
+      data: transactions,
+      error: transactionError,
+    } = await admin
+      .from('payment_transactions')
+      .select('id')
+      .eq('spp_bill_id', id)
+      .limit(1)
+
+    if (transactionError) {
+      console.error(
+        'DELETE BILL TRANSACTION CHECK ERROR:',
+        transactionError,
+      )
+
+      return json(
+        {
+          error:
+            'Gagal memeriksa transaksi.',
+        },
+        500,
+      )
+    }
+
+    if (
+      (transactions ?? []).length >
+      0
+    ) {
+      return json(
+        {
+          error:
+            'Tagihan tidak dapat dihapus karena sudah memiliki riwayat transaksi.',
+        },
+        400,
+      )
+    }
+
+    /*
+     * Kondisi payment_status PAID
+     * ditambahkan lagi pada DELETE.
+     *
+     * Jadi kalau status berubah menjadi
+     * PAID tepat sebelum delete, request
+     * tidak boleh menghapusnya.
+     */
+    const {
+      data: deletedBill,
+      error: deleteError,
+    } = await admin
+      .from('spp_bills')
+      .delete()
+      .eq('id', id)
+      .neq('payment_status', 'PAID')
+      .select('id')
+      .maybeSingle()
+
+    if (deleteError) {
+      console.error(
+        'DELETE FINANCE ERROR:',
+        deleteError,
+      )
+
+      /*
+       * 23503 biasanya FK violation.
+       * Artinya ada data transaksi/relation
+       * yang masih mereferensikan bill.
+       */
+      if (
+        deleteError.code ===
+        '23503'
+      ) {
+        return json(
+          {
+            error:
+              'Tagihan tidak dapat dihapus karena masih memiliki data terkait.',
+          },
+          409,
+        )
+      }
+
+      return json(
+        {
+          error:
+            'Gagal menghapus tagihan.',
+        },
+        500,
+      )
+    }
+
+    if (!deletedBill) {
+      return json(
+        {
+          error:
+            'Tagihan sudah tidak dapat dihapus.',
+        },
+        409,
+      )
+    }
+
+    return json({
+      message:
+        'Tagihan berhasil dihapus.',
+    })
+  } catch (error) {
     console.error(
       'DELETE FINANCE ERROR:',
-      deleteError,
+      error,
     )
 
-    return NextResponse.json(
+    return json(
       {
-        error: 'Gagal menghapus tagihan.',
+        error:
+          'Terjadi kesalahan pada server.',
       },
-      { status: 500 },
+      500,
     )
   }
-
-  return NextResponse.json({
-    message: 'Tagihan berhasil dihapus.',
-  })
 }

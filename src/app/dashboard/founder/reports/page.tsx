@@ -1,9 +1,8 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import Link from "next/link"
+
 import {
-  ArrowLeft,
   BarChart3,
   BookOpen,
   CalendarDays,
@@ -21,7 +20,6 @@ import {
 
 type ReportData = {
   period: string
-
   academic: {
     total_students: number
     active_students: number
@@ -35,7 +33,6 @@ type ReportData = {
     attendance_rate: number
     students_need_attention: number
   }
-
   attendance: {
     total_records: number
     hadir: number
@@ -44,7 +41,6 @@ type ReportData = {
     alpha: number
     attendance_rate: number
   }
-
   finance: {
     total_bills: number
     paid_bills: number
@@ -56,7 +52,6 @@ type ReportData = {
     total_paid: number
     total_unpaid: number
   }
-
   transactions: {
     total_transactions: number
     successful_transactions: number
@@ -64,13 +59,11 @@ type ReportData = {
     pending_transactions: number
     total_amount: number
   }
-
   payment_methods: Array<{
     payment_type: string
     transaction_count: number
     total_amount: number
   }>
-
   classes: Array<{
     id: string
     className: string
@@ -80,7 +73,6 @@ type ReportData = {
     attendanceRate: number
     averageScore: number
   }>
-
   student_finance: Array<{
     student_id: string
     student_name: string
@@ -116,7 +108,9 @@ function formatDate(value: string | null | undefined) {
 
   const date = new Date(value)
 
-  if (Number.isNaN(date.getTime())) return "-"
+  if (Number.isNaN(date.getTime())) {
+    return "-"
+  }
 
   return date.toLocaleDateString("id-ID", {
     day: "2-digit",
@@ -130,7 +124,9 @@ function formatMonth(value: string) {
 
   const date = new Date(`${value}-01T00:00:00`)
 
-  if (Number.isNaN(date.getTime())) return value
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
 
   return date.toLocaleDateString("id-ID", {
     month: "long",
@@ -179,11 +175,11 @@ function statusClass(status: string) {
     normalized === "CAPTURE" ||
     normalized === "ACTIVE"
   ) {
-    return "bg-emerald-50 text-emerald-700 border-emerald-200"
+    return "border-emerald-200 bg-emerald-50 text-emerald-700"
   }
 
   if (normalized === "PENDING") {
-    return "bg-amber-50 text-amber-700 border-amber-200"
+    return "border-amber-200 bg-amber-50 text-amber-700"
   }
 
   if (
@@ -192,10 +188,10 @@ function statusClass(status: string) {
     normalized === "CANCELLED" ||
     normalized === "INACTIVE"
   ) {
-    return "bg-red-50 text-red-700 border-red-200"
+    return "border-red-200 bg-red-50 text-red-700"
   }
 
-  return "bg-gray-50 text-gray-700 border-gray-200"
+  return "border-gray-200 bg-gray-50 text-gray-700"
 }
 
 function Card({
@@ -212,12 +208,12 @@ function Card({
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm font-medium text-gray-500">
             {title}
           </p>
 
-          <p className="mt-2 text-2xl font-bold text-gray-900">
+          <p className="mt-2 truncate text-2xl font-bold text-gray-900">
             {value}
           </p>
 
@@ -228,9 +224,37 @@ function Card({
           )}
         </div>
 
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gray-900 text-white">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
           {icon}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function SectionHeader({
+  icon,
+  title,
+  description,
+}: {
+  icon: React.ReactNode
+  title: string
+  description: string
+}) {
+  return (
+    <div className="mb-5 flex items-center gap-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+        {icon}
+      </div>
+
+      <div>
+        <h2 className="font-bold text-gray-900">
+          {title}
+        </h2>
+
+        <p className="text-sm text-gray-500">
+          {description}
+        </p>
       </div>
     </div>
   )
@@ -256,7 +280,7 @@ export default function FounderReportsPage() {
       setError("")
 
       const response = await fetch(
-        `/api/founder/reports?month=${month}`,
+        `/api/founder/reports?month=${encodeURIComponent(month)}`,
         {
           cache: "no-store",
         },
@@ -292,19 +316,27 @@ export default function FounderReportsPage() {
   }, [month])
 
   function handleExportPDF() {
+    if (!data || loading || exporting) return
+
     setExporting(true)
 
     window.location.href =
-      `/api/founder/reports?month=${month}&export=pdf`
+      `/api/founder/reports?month=${encodeURIComponent(
+        month,
+      )}&export=pdf`
 
-    setTimeout(() => {
+    window.setTimeout(() => {
       setExporting(false)
     }, 3000)
   }
 
   function handleExportCSV() {
+    if (!data || loading) return
+
     window.location.href =
-      `/api/founder/reports?month=${month}&export=csv`
+      `/api/founder/reports?month=${encodeURIComponent(
+        month,
+      )}&export=csv`
   }
 
   return (
@@ -313,18 +345,10 @@ export default function FounderReportsPage() {
 
         {/* HEADER */}
         <div className="mb-6">
-          <Link
-            href="/dashboard/founder"
-            className="mb-4 inline-flex items-center gap-2 text-sm font-medium text-gray-500 transition hover:text-gray-900"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Kembali ke Dashboard
-          </Link>
-
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <div className="flex items-center gap-3">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gray-900 text-white">
+                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-red-50 text-red-600">
                   <FileText className="h-6 w-6" />
                 </div>
 
@@ -355,7 +379,7 @@ export default function FounderReportsPage() {
                 type="button"
                 onClick={handleExportPDF}
                 disabled={loading || !data || exporting}
-                className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {exporting ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
@@ -392,7 +416,7 @@ export default function FounderReportsPage() {
                   onChange={(event) =>
                     setMonth(event.target.value)
                   }
-                  className="w-full rounded-xl border border-gray-300 bg-white py-2.5 pl-10 pr-3 text-sm text-gray-900 outline-none transition focus:border-gray-900 focus:ring-2 focus:ring-gray-900/10 sm:max-w-xs"
+                  className="w-full rounded-xl border border-gray-300 bg-white py-2.5 pl-10 pr-3 text-sm text-gray-900 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-500/10 sm:max-w-xs"
                 />
               </div>
             </div>
@@ -408,7 +432,8 @@ export default function FounderReportsPage() {
                   loading ? "animate-spin" : ""
                 }`}
               />
-              Refresh
+
+              Perbarui Laporan
             </button>
           </div>
         </div>
@@ -434,9 +459,9 @@ export default function FounderReportsPage() {
 
         {/* LOADING */}
         {loading && (
-          <div className="flex min-h-[400px] items-center justify-center rounded-2xl border border-gray-200 bg-white">
+          <div className="flex min-h-[400px] items-center justify-center rounded-2xl border border-gray-200 bg-white shadow-sm">
             <div className="text-center">
-              <Loader2 className="mx-auto h-8 w-8 animate-spin text-gray-900" />
+              <Loader2 className="mx-auto h-8 w-8 animate-spin text-red-600" />
 
               <p className="mt-3 text-sm font-medium text-gray-600">
                 Menyiapkan laporan...
@@ -462,7 +487,7 @@ export default function FounderReportsPage() {
                   </h2>
                 </div>
 
-                <div className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-semibold text-gray-600">
+                <div className="w-fit rounded-full border border-red-100 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600">
                   NAGALA EDUCATION
                 </div>
               </div>
@@ -471,7 +496,7 @@ export default function FounderReportsPage() {
             {/* OVERVIEW */}
             <section>
               <div className="mb-3 flex items-center gap-2">
-                <BarChart3 className="h-5 w-5 text-gray-700" />
+                <BarChart3 className="h-5 w-5 text-red-600" />
 
                 <h2 className="text-lg font-bold text-gray-900">
                   Ringkasan Utama
@@ -527,21 +552,11 @@ export default function FounderReportsPage() {
 
             {/* ACADEMIC */}
             <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
-                  <BookOpen className="h-5 w-5 text-gray-700" />
-                </div>
-
-                <div>
-                  <h2 className="font-bold text-gray-900">
-                    Akademik
-                  </h2>
-
-                  <p className="text-sm text-gray-500">
-                    Ringkasan kondisi akademik siswa
-                  </p>
-                </div>
-              </div>
+              <SectionHeader
+                icon={<BookOpen className="h-5 w-5" />}
+                title="Akademik"
+                description="Ringkasan kondisi akademik siswa"
+              />
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl bg-gray-50 p-4">
@@ -580,8 +595,8 @@ export default function FounderReportsPage() {
                   </p>
                 </div>
 
-                <div className="rounded-xl bg-gray-50 p-4">
-                  <p className="text-xs text-gray-500">
+                <div className="rounded-xl bg-red-50 p-4">
+                  <p className="text-xs text-red-600">
                     Perlu Perhatian
                   </p>
 
@@ -599,7 +614,7 @@ export default function FounderReportsPage() {
                     Rata-rata Nilai
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {safeFixed(
                       data.academic.average_grade,
                       1,
@@ -612,7 +627,7 @@ export default function FounderReportsPage() {
                     Kehadiran
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {safeFixed(
                       data.academic.attendance_rate,
                       1,
@@ -626,7 +641,7 @@ export default function FounderReportsPage() {
                     Total Enrollment
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {safeNumber(
                       data.academic.total_enrollments,
                     )}
@@ -637,21 +652,11 @@ export default function FounderReportsPage() {
 
             {/* ATTENDANCE */}
             <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
-                  <CalendarDays className="h-5 w-5 text-gray-700" />
-                </div>
-
-                <div>
-                  <h2 className="font-bold text-gray-900">
-                    Kehadiran
-                  </h2>
-
-                  <p className="text-sm text-gray-500">
-                    Rekap seluruh catatan kehadiran
-                  </p>
-                </div>
-              </div>
+              <SectionHeader
+                icon={<CalendarDays className="h-5 w-5" />}
+                title="Kehadiran"
+                description="Rekap seluruh catatan kehadiran"
+              />
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
                 <div className="rounded-xl border border-gray-200 p-4">
@@ -659,7 +664,7 @@ export default function FounderReportsPage() {
                     Total
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {safeNumber(
                       data.attendance.total_records,
                     )}
@@ -732,7 +737,7 @@ export default function FounderReportsPage() {
 
                 <div className="h-2 overflow-hidden rounded-full bg-gray-100">
                   <div
-                    className="h-full rounded-full bg-gray-900 transition-all"
+                    className="h-full rounded-full bg-red-500 transition-all"
                     style={{
                       width: `${Math.min(
                         100,
@@ -752,21 +757,11 @@ export default function FounderReportsPage() {
 
             {/* FINANCE */}
             <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
-                  <Wallet className="h-5 w-5 text-gray-700" />
-                </div>
-
-                <div>
-                  <h2 className="font-bold text-gray-900">
-                    Keuangan
-                  </h2>
-
-                  <p className="text-sm text-gray-500">
-                    Rekap tagihan SPP dan pembayaran
-                  </p>
-                </div>
-              </div>
+              <SectionHeader
+                icon={<Wallet className="h-5 w-5" />}
+                title="Keuangan"
+                description="Rekap tagihan SPP dan pembayaran"
+              />
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-gray-200 p-4">
@@ -774,7 +769,7 @@ export default function FounderReportsPage() {
                     Total Tagihan
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {safeNumber(
                       data.finance.total_bills,
                     )}
@@ -837,21 +832,11 @@ export default function FounderReportsPage() {
 
             {/* TRANSACTIONS */}
             <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100">
-                  <CreditCard className="h-5 w-5 text-gray-700" />
-                </div>
-
-                <div>
-                  <h2 className="font-bold text-gray-900">
-                    Transaksi
-                  </h2>
-
-                  <p className="text-sm text-gray-500">
-                    Rekap pembayaran yang diproses
-                  </p>
-                </div>
-              </div>
+              <SectionHeader
+                icon={<CreditCard className="h-5 w-5" />}
+                title="Transaksi"
+                description="Rekap pembayaran yang diproses"
+              />
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-gray-200 p-4">
@@ -859,7 +844,7 @@ export default function FounderReportsPage() {
                     Total Transaksi
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {safeNumber(
                       data.transactions.total_transactions,
                     )}
@@ -897,7 +882,7 @@ export default function FounderReportsPage() {
                     Nilai Transaksi
                   </p>
 
-                  <p className="mt-1 text-xl font-bold">
+                  <p className="mt-1 text-xl font-bold text-gray-900">
                     {formatRupiah(
                       data.transactions.total_amount,
                     )}
@@ -941,9 +926,7 @@ export default function FounderReportsPage() {
                       {data.payment_methods.map(
                         (item) => (
                           <tr
-                            key={
-                              item.payment_type
-                            }
+                            key={item.payment_type}
                             className="border-b border-gray-100 last:border-0"
                           >
                             <td className="px-3 py-3 font-medium text-gray-900">
@@ -1022,13 +1005,11 @@ export default function FounderReportsPage() {
                             className="border-b border-gray-100 last:border-0"
                           >
                             <td className="px-3 py-3 font-semibold text-gray-900">
-                              {item.className ||
-                                "-"}
+                              {item.className || "-"}
                             </td>
 
                             <td className="px-3 py-3 text-gray-600">
-                              {item.subject ||
-                                "-"}
+                              {item.subject || "-"}
                             </td>
 
                             <td className="px-3 py-3">
@@ -1119,24 +1100,19 @@ export default function FounderReportsPage() {
                       {data.student_finance.map(
                         (item) => (
                           <tr
-                            key={
-                              item.student_id
-                            }
+                            key={item.student_id}
                             className="border-b border-gray-100 last:border-0"
                           >
                             <td className="px-3 py-3 font-semibold text-gray-900">
-                              {item.student_name ||
-                                "-"}
+                              {item.student_name || "-"}
                             </td>
 
                             <td className="px-3 py-3 text-gray-600">
-                              {item.grade_level ||
-                                "-"}
+                              {item.grade_level || "-"}
                             </td>
 
                             <td className="px-3 py-3 text-gray-600">
-                              {item.school_name ||
-                                "-"}
+                              {item.school_name || "-"}
                             </td>
 
                             <td className="px-3 py-3">
@@ -1152,15 +1128,11 @@ export default function FounderReportsPage() {
                             </td>
 
                             <td className="px-3 py-3 text-right font-medium text-gray-900">
-                              {formatRupiah(
-                                item.amount,
-                              )}
+                              {formatRupiah(item.amount)}
                             </td>
 
                             <td className="px-3 py-3 text-gray-600">
-                              {formatDate(
-                                item.paid_at,
-                              )}
+                              {formatDate(item.paid_at)}
                             </td>
                           </tr>
                         ),

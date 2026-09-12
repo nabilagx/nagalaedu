@@ -1,15 +1,66 @@
-
-
-import { NextRequest, NextResponse } from 'next/server'
+import {
+  NextRequest,
+  NextResponse,
+} from 'next/server'
 
 import { requireFounder } from '@/lib/auth/requireFounder'
 import { createAdminClient } from '@/lib/supabase/admin'
+
+type StudentRow = {
+  id: string
+  student_name: string | null
+  grade_level: string | null
+  school_name: string | null
+  phone_number: string | null
+  status: string | null
+}
+
+type EnrollmentRow = {
+  id: string
+  class_id: string
+  student_id: string
+  enrolled_at: string | null
+  ended_at: string | null
+  status: string
+}
+
+type ClassRow = {
+  id: string
+  class_name: string
+  subject: string
+  description: string | null
+  schedule_day: string
+  schedule_start: string
+  schedule_end: string
+  status: string
+}
+
+type AttendanceRow = {
+  id: string
+  enrollment_id: string
+  attendance_date: string
+  status: string
+  notes: string | null
+}
+
+type GradeRow = {
+  id: string
+  enrollment_id: string
+  subject: string | null
+  assessment_name: string
+  score: number
+  feedback_notes: string | null
+  created_at: string
+}
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export async function GET(
   request: NextRequest,
   context: {
     params: Promise<{ id: string }>
-  }
+  },
 ) {
   const auth = await requireFounder()
 
@@ -20,12 +71,17 @@ export async function GET(
   try {
     const { id } = await context.params
 
-    if (!id) {
+    // ==========================================
+    // VALIDASI UUID
+    // ==========================================
+
+    if (!id || !UUID_REGEX.test(id)) {
       return NextResponse.json(
         {
-          error: 'ID siswa tidak valid.',
+          error:
+            'ID siswa tidak valid.',
         },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
@@ -40,39 +96,46 @@ export async function GET(
       error: studentError,
     } = await admin
       .from('students')
-      .select(`
+      .select(
+        `
         id,
         student_name,
         grade_level,
         school_name,
         phone_number,
         status
-      `)
+        `,
+      )
       .eq('id', id)
       .maybeSingle()
 
     if (studentError) {
       console.error(
         'GET ACADEMIC DETAIL STUDENT ERROR:',
-        studentError
+        studentError,
       )
 
       return NextResponse.json(
         {
-          error: 'Gagal mengambil data siswa.',
+          error:
+            'Gagal mengambil data siswa.',
         },
-        { status: 500 }
+        { status: 500 },
       )
     }
 
     if (!student) {
       return NextResponse.json(
         {
-          error: 'Siswa tidak ditemukan.',
+          error:
+            'Siswa tidak ditemukan.',
         },
-        { status: 404 }
+        { status: 404 },
       )
     }
+
+    const studentRow =
+      student as StudentRow
 
     // ==========================================
     // ENROLLMENTS
@@ -83,14 +146,16 @@ export async function GET(
       error: enrollmentError,
     } = await admin
       .from('class_enrollments')
-      .select(`
+      .select(
+        `
         id,
         class_id,
         student_id,
         enrolled_at,
         ended_at,
         status
-      `)
+        `,
+      )
       .eq('student_id', id)
       .order('enrolled_at', {
         ascending: false,
@@ -99,7 +164,7 @@ export async function GET(
     if (enrollmentError) {
       console.error(
         'GET ACADEMIC DETAIL ENROLLMENT ERROR:',
-        enrollmentError
+        enrollmentError,
       )
 
       return NextResponse.json(
@@ -107,18 +172,18 @@ export async function GET(
           error:
             'Gagal mengambil data kelas siswa.',
         },
-        { status: 500 }
+        { status: 500 },
       )
     }
 
-    const enrollmentRows =
+    const enrollmentRows: EnrollmentRow[] =
       enrollments ?? []
 
     const classIds = [
       ...new Set(
         enrollmentRows.map(
-          (item) => item.class_id
-        )
+          (item) => item.class_id,
+        ),
       ),
     ]
 
@@ -126,46 +191,54 @@ export async function GET(
     // CLASSES
     // ==========================================
 
-    let classes: any[] = []
+    let classes: ClassRow[] = []
 
     if (classIds.length > 0) {
-      const { data: classData, error } =
-        await admin
-          .from('classes')
-          .select(`
-            id,
-            class_name,
-            subject,
-            description,
-            schedule_day,
-            schedule_start,
-            schedule_end,
-            status
-          `)
-          .in('id', classIds)
+      const {
+        data: classData,
+        error,
+      } = await admin
+        .from('classes')
+        .select(
+          `
+          id,
+          class_name,
+          subject,
+          description,
+          schedule_day,
+          schedule_start,
+          schedule_end,
+          status
+          `,
+        )
+        .in('id', classIds)
 
       if (error) {
         console.error(
           'GET ACADEMIC DETAIL CLASSES ERROR:',
-          error
+          error,
         )
 
         return NextResponse.json(
           {
-            error: 'Gagal mengambil data kelas.',
+            error:
+              'Gagal mengambil data kelas.',
           },
-          { status: 500 }
+          { status: 500 },
         )
       }
 
       classes = classData ?? []
     }
 
-    const classMap = new Map(
+    const classMap = new Map<
+      string,
+      ClassRow
+    >(
       classes.map((item) => [
         item.id,
         item,
-      ])
+      ]),
     )
 
     // ==========================================
@@ -174,34 +247,38 @@ export async function GET(
 
     const enrollmentIds =
       enrollmentRows.map(
-        (item) => item.id
+        (item) => item.id,
       )
 
-    let attendance: any[] = []
+    let attendance: AttendanceRow[] = []
 
     if (enrollmentIds.length > 0) {
-      const { data, error } =
-        await admin
-          .from('student_attendance')
-          .select(`
-            id,
-            enrollment_id,
-            attendance_date,
-            status,
-            notes
-          `)
-          .in(
-            'enrollment_id',
-            enrollmentIds
-          )
-          .order('attendance_date', {
-            ascending: false,
-          })
+      const {
+        data,
+        error,
+      } = await admin
+        .from('student_attendance')
+        .select(
+          `
+          id,
+          enrollment_id,
+          attendance_date,
+          status,
+          notes
+          `,
+        )
+        .in(
+          'enrollment_id',
+          enrollmentIds,
+        )
+        .order('attendance_date', {
+          ascending: false,
+        })
 
       if (error) {
         console.error(
           'GET ACADEMIC DETAIL ATTENDANCE ERROR:',
-          error
+          error,
         )
 
         return NextResponse.json(
@@ -209,7 +286,7 @@ export async function GET(
             error:
               'Gagal mengambil data kehadiran.',
           },
-          { status: 500 }
+          { status: 500 },
         )
       }
 
@@ -220,40 +297,45 @@ export async function GET(
     // GRADES
     // ==========================================
 
-    let grades: any[] = []
+    let grades: GradeRow[] = []
 
     if (enrollmentIds.length > 0) {
-      const { data, error } =
-        await admin
-          .from('grades')
-          .select(`
-            id,
-            enrollment_id,
-            subject,
-            assessment_name,
-            score,
-            feedback_notes,
-            created_at
-          `)
-          .in(
-            'enrollment_id',
-            enrollmentIds
-          )
-          .order('created_at', {
-            ascending: false,
-          })
+      const {
+        data,
+        error,
+      } = await admin
+        .from('grades')
+        .select(
+          `
+          id,
+          enrollment_id,
+          subject,
+          assessment_name,
+          score,
+          feedback_notes,
+          created_at
+          `,
+        )
+        .in(
+          'enrollment_id',
+          enrollmentIds,
+        )
+        .order('created_at', {
+          ascending: false,
+        })
 
       if (error) {
         console.error(
           'GET ACADEMIC DETAIL GRADES ERROR:',
-          error
+          error,
         )
 
         return NextResponse.json(
           {
-            error: 'Gagal mengambil data nilai.',
+            error:
+              'Gagal mengambil data nilai.',
           },
-          { status: 500 }
+          { status: 500 },
         )
       }
 
@@ -272,28 +354,25 @@ export async function GET(
     }
 
     for (const item of attendance) {
-      if (
-        item.status === 'HADIR'
-      ) {
-        attendanceSummary.hadir++
-      }
+      switch (item.status) {
+        case 'HADIR':
+          attendanceSummary.hadir++
+          break
 
-      if (
-        item.status === 'IZIN'
-      ) {
-        attendanceSummary.izin++
-      }
+        case 'IZIN':
+          attendanceSummary.izin++
+          break
 
-      if (
-        item.status === 'SAKIT'
-      ) {
-        attendanceSummary.sakit++
-      }
+        case 'SAKIT':
+          attendanceSummary.sakit++
+          break
 
-      if (
-        item.status === 'ALPHA'
-      ) {
-        attendanceSummary.alpha++
+        case 'ALPHA':
+          attendanceSummary.alpha++
+          break
+
+        default:
+          break
       }
     }
 
@@ -315,9 +394,11 @@ export async function GET(
     // ==========================================
 
     const scoreValues = grades
-      .map((item) => Number(item.score))
-      .filter(
-        (score) => !Number.isNaN(score)
+      .map((item) =>
+        Number(item.score),
+      )
+      .filter((score) =>
+        Number.isFinite(score),
       )
 
     const averageScore =
@@ -325,13 +406,12 @@ export async function GET(
         ? scoreValues.reduce(
             (sum, score) =>
               sum + score,
-            0
-          ) /
-          scoreValues.length
+            0,
+          ) / scoreValues.length
         : 0
 
     // ==========================================
-    // RESPONSE
+    // ENROLLMENTS RESPONSE
     // ==========================================
 
     const formattedEnrollments =
@@ -339,7 +419,7 @@ export async function GET(
         (enrollment) => {
           const classData =
             classMap.get(
-              enrollment.class_id
+              enrollment.class_id,
             )
 
           return {
@@ -370,8 +450,12 @@ export async function GET(
                 }
               : null,
           }
-        }
+        },
       )
+
+    // ==========================================
+    // ATTENDANCE RESPONSE
+    // ==========================================
 
     const formattedAttendance =
       attendance.map((item) => {
@@ -379,20 +463,19 @@ export async function GET(
           enrollmentRows.find(
             (enrollment) =>
               enrollment.id ===
-              item.enrollment_id
+              item.enrollment_id,
           )
 
         const classData =
           enrollment
             ? classMap.get(
-                enrollment.class_id
+                enrollment.class_id,
               )
             : null
 
         return {
           id: item.id,
-          date:
-            item.attendance_date,
+          date: item.attendance_date,
           status: item.status,
           notes: item.notes,
           className:
@@ -403,62 +486,78 @@ export async function GET(
         }
       })
 
+    // ==========================================
+    // GRADES RESPONSE
+    // ==========================================
+
     const formattedGrades =
       grades.map((item) => {
         const enrollment =
           enrollmentRows.find(
             (enrollment) =>
               enrollment.id ===
-              item.enrollment_id
+              item.enrollment_id,
           )
 
         const classData =
           enrollment
             ? classMap.get(
-                enrollment.class_id
+                enrollment.class_id,
               )
             : null
 
         return {
           id: item.id,
+
           subject:
             item.subject ??
             classData?.subject ??
             '-',
+
           assessmentName:
             item.assessment_name,
+
           score: Number(item.score),
+
           feedbackNotes:
             item.feedback_notes,
+
           createdAt:
             item.created_at,
         }
       })
 
+    // ==========================================
+    // RESPONSE
+    // ==========================================
+
     return NextResponse.json({
       student: {
-        id: student.id,
+        id: studentRow.id,
         studentName:
-          student.student_name,
+          studentRow.student_name,
         gradeLevel:
-          student.grade_level,
+          studentRow.grade_level,
         schoolName:
-          student.school_name,
+          studentRow.school_name,
         phoneNumber:
-          student.phone_number,
-        status: student.status,
+          studentRow.phone_number,
+        status:
+          studentRow.status,
       },
 
       summary: {
         attendance: {
           ...attendanceSummary,
           percentage: Number(
-            attendancePercentage.toFixed(1)
+            attendancePercentage.toFixed(
+              1,
+            ),
           ),
         },
 
         averageScore: Number(
-          averageScore.toFixed(1)
+          averageScore.toFixed(1),
         ),
 
         totalGrades:
@@ -480,14 +579,15 @@ export async function GET(
   } catch (error) {
     console.error(
       'GET ACADEMIC DETAIL UNEXPECTED ERROR:',
-      error
+      error,
     )
 
     return NextResponse.json(
       {
-        error: 'Terjadi kesalahan pada server.',
+        error:
+          'Terjadi kesalahan pada server.',
       },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

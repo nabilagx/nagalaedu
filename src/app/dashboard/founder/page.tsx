@@ -518,6 +518,7 @@ export default function FounderDashboardPage() {
             </p>
           </div>
 
+
           <button
             onClick={handleRefresh}
             disabled={refreshing}
@@ -552,6 +553,8 @@ export default function FounderDashboardPage() {
 
             Perbarui Data
           </button>
+
+          
         </div>
 
         {/* ERROR */}
@@ -932,7 +935,7 @@ export default function FounderDashboardPage() {
             </div>
 
             <a
-              href="/dashboard/founder/spp"
+              href="/dashboard/founder/finance"
               className="text-xs font-semibold text-[#E53935] transition hover:text-[#C62828]"
             >
               Lihat semua

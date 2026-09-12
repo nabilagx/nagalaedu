@@ -165,7 +165,7 @@ export default function MonitoringTutorPage() {
               }`}
             />
 
-            Refresh
+            Perbarui Data
           </button>
         </div>
 

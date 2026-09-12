@@ -3,6 +3,51 @@ import { NextResponse } from 'next/server'
 import { requireFounder } from '@/lib/auth/requireFounder'
 import { createAdminClient } from '@/lib/supabase/admin'
 
+type StudentRow = {
+  id: string
+  student_name: string | null
+  grade_level: string | null
+  school_name: string | null
+  phone_number: string | null
+  status: string | null
+}
+
+type ClassRow = {
+  id: string
+  class_name: string
+  subject: string
+  status: string
+}
+
+type EnrollmentRow = {
+  id: string
+  class_id: string
+  student_id: string
+  status: string
+}
+
+type AttendanceRow = {
+  enrollment_id: string
+  status: string
+}
+
+type GradeRow = {
+  enrollment_id: string
+  subject: string
+  score: number
+}
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+const ALLOWED_STATUS = new Set([
+  'ALL',
+  'ACTIVE',
+  'INACTIVE',
+])
+
+const MAX_SEARCH_LENGTH = 100
+
 export async function GET(request: Request) {
   const auth = await requireFounder()
 
@@ -12,41 +57,98 @@ export async function GET(request: Request) {
 
   try {
     const admin = createAdminClient()
-
     const { searchParams } = new URL(request.url)
 
+    const rawSearch =
+      searchParams.get('search') ?? ''
+
+    if (rawSearch.length > MAX_SEARCH_LENGTH) {
+      return NextResponse.json(
+        {
+          error:
+            'Pencarian terlalu panjang.',
+        },
+        { status: 400 },
+      )
+    }
+
     const search =
-      searchParams.get('search')?.trim().toLowerCase() ?? ''
+      rawSearch.trim().toLowerCase()
 
     const classId =
-      searchParams.get('classId') ?? 'ALL'
+      searchParams.get('classId')?.trim() ??
+      'ALL'
 
     const subject =
-      searchParams.get('subject') ?? 'ALL'
+      searchParams.get('subject')?.trim() ??
+      'ALL'
 
     const status =
-      searchParams.get('status') ?? 'ALL'
+      searchParams.get('status')?.trim() ??
+      'ALL'
 
-    // =========================
+    // ==========================================
+    // VALIDASI FILTER
+    // ==========================================
+
+    if (!ALLOWED_STATUS.has(status)) {
+      return NextResponse.json(
+        {
+          error:
+            'Filter status tidak valid.',
+        },
+        { status: 400 },
+      )
+    }
+
+    if (
+      classId !== 'ALL' &&
+      !UUID_REGEX.test(classId)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'ID kelas tidak valid.',
+        },
+        { status: 400 },
+      )
+    }
+
+    if (
+      subject !== 'ALL' &&
+      subject.length > 100
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Filter mata pelajaran tidak valid.',
+        },
+        { status: 400 },
+      )
+    }
+
+    // ==========================================
     // STUDENTS
-    // =========================
+    // ==========================================
 
-    const { data: students, error: studentsError } =
-      await admin
-        .from('students')
-        .select(
-          `
-          id,
-          student_name,
-          grade_level,
-          school_name,
-          phone_number,
-          status
-          `,
-        )
-        .order('student_name', {
-          ascending: true,
-        })
+    const {
+      data: students,
+      error: studentsError,
+    } = await admin
+      .from('students')
+      .select(
+        `
+        id,
+        student_name,
+        grade_level,
+        school_name,
+        phone_number,
+        status
+        `,
+      )
+      .order('student_name', {
+        ascending: true,
+      })
 
     if (studentsError) {
       console.error(
@@ -63,26 +165,29 @@ export async function GET(request: Request) {
       )
     }
 
-    const studentList = students ?? []
+    const studentList: StudentRow[] =
+      students ?? []
 
-    // =========================
+    // ==========================================
     // CLASSES
-    // =========================
+    // ==========================================
 
-    const { data: classes, error: classesError } =
-      await admin
-        .from('classes')
-        .select(
-          `
-          id,
-          class_name,
-          subject,
-          status
-          `,
-        )
-        .order('class_name', {
-          ascending: true,
-        })
+    const {
+      data: classes,
+      error: classesError,
+    } = await admin
+      .from('classes')
+      .select(
+        `
+        id,
+        class_name,
+        subject,
+        status
+        `,
+      )
+      .order('class_name', {
+        ascending: true,
+      })
 
     if (classesError) {
       console.error(
@@ -99,23 +204,46 @@ export async function GET(request: Request) {
       )
     }
 
-    const classList = classes ?? []
+    const classList: ClassRow[] =
+      classes ?? []
 
-    // =========================
-    // ENROLLMENTS
-    // =========================
+    // ==========================================
+    // VALIDASI CLASS ID TERHADAP DATA DATABASE
+    // ==========================================
 
-    const { data: enrollments, error: enrollmentsError } =
-      await admin
-        .from('class_enrollments')
-        .select(
-          `
-          id,
-          class_id,
-          student_id,
-          status
-          `,
+    if (classId !== 'ALL') {
+      const classExists = classList.some(
+        (item) => item.id === classId,
+      )
+
+      if (!classExists) {
+        return NextResponse.json(
+          {
+            error:
+              'Kelas tidak ditemukan.',
+          },
+          { status: 404 },
         )
+      }
+    }
+
+    // ==========================================
+    // ENROLLMENTS
+    // ==========================================
+
+    const {
+      data: enrollments,
+      error: enrollmentsError,
+    } = await admin
+      .from('class_enrollments')
+      .select(
+        `
+        id,
+        class_id,
+        student_id,
+        status
+        `,
+      )
 
     if (enrollmentsError) {
       console.error(
@@ -132,21 +260,19 @@ export async function GET(request: Request) {
       )
     }
 
-    const enrollmentList = enrollments ?? []
+    const enrollmentList: EnrollmentRow[] =
+      enrollments ?? []
 
     const enrollmentIds =
       enrollmentList.map(
         (item) => item.id,
       )
 
-    // =========================
+    // ==========================================
     // ATTENDANCE
-    // =========================
+    // ==========================================
 
-    let attendance: Array<{
-      enrollment_id: string
-      status: string
-    }> = []
+    let attendance: AttendanceRow[] = []
 
     if (enrollmentIds.length > 0) {
       const {
@@ -183,15 +309,11 @@ export async function GET(request: Request) {
       attendance = data ?? []
     }
 
-    // =========================
+    // ==========================================
     // GRADES
-    // =========================
+    // ==========================================
 
-    let grades: Array<{
-      enrollment_id: string
-      subject: string
-      score: number
-    }> = []
+    let grades: GradeRow[] = []
 
     if (enrollmentIds.length > 0) {
       const {
@@ -229,9 +351,9 @@ export async function GET(request: Request) {
       grades = data ?? []
     }
 
-    // =========================
+    // ==========================================
     // FILTER ENROLLMENTS
-    // =========================
+    // ==========================================
 
     const filteredEnrollments =
       enrollmentList.filter(
@@ -270,9 +392,9 @@ export async function GET(request: Request) {
         ),
       )
 
-    // =========================
+    // ==========================================
     // STUDENT METRICS
-    // =========================
+    // ==========================================
 
     const result = studentList
       .map((student) => {
@@ -295,6 +417,10 @@ export async function GET(request: Request) {
               (item) => item.id,
             ),
           )
+
+        // ------------------------------
+        // ATTENDANCE
+        // ------------------------------
 
         const studentAttendance =
           attendance.filter(
@@ -327,6 +453,10 @@ export async function GET(request: Request) {
               )
             : 0
 
+        // ------------------------------
+        // GRADES
+        // ------------------------------
+
         const studentGrades =
           grades.filter(
             (item) =>
@@ -335,20 +465,33 @@ export async function GET(request: Request) {
               ),
           )
 
+        const validScores =
+          studentGrades
+            .map((item) =>
+              Number(item.score),
+            )
+            .filter(
+              (score) =>
+                Number.isFinite(score),
+            )
+
         const averageScore =
-          studentGrades.length > 0
+          validScores.length > 0
             ? Number(
                 (
-                  studentGrades.reduce(
-                    (sum, item) =>
-                      sum +
-                      Number(item.score),
+                  validScores.reduce(
+                    (sum, score) =>
+                      sum + score,
                     0,
                   ) /
-                  studentGrades.length
+                  validScores.length
                 ).toFixed(1),
               )
             : 0
+
+        // ------------------------------
+        // ATTENTION FLAG
+        // ------------------------------
 
         const needsAttention =
           attendancePercentage < 80 ||
@@ -368,7 +511,7 @@ export async function GET(request: Request) {
           attendancePercentage,
           averageScore,
           totalGrades:
-            studentGrades.length,
+            validScores.length,
           totalClasses:
             activeEnrollments.length,
           attendanceAlpha:
@@ -377,7 +520,10 @@ export async function GET(request: Request) {
         }
       })
       .filter((student) => {
-        // Search
+        // ------------------------------
+        // SEARCH
+        // ------------------------------
+
         const matchesSearch =
           !search ||
           student.studentName
@@ -387,7 +533,10 @@ export async function GET(request: Request) {
             .toLowerCase()
             .includes(search)
 
-        // Status
+        // ------------------------------
+        // STATUS
+        // ------------------------------
+
         const matchesStatus =
           status === 'ALL' ||
           student.status === status
@@ -398,9 +547,9 @@ export async function GET(request: Request) {
         )
       })
 
-    // =========================
+    // ==========================================
     // SUMMARY
-    // =========================
+    // ==========================================
 
     const totalStudents =
       result.length
@@ -436,17 +585,26 @@ export async function GET(request: Request) {
         ),
       )
 
+    const validAllScores =
+      allGrades
+        .map((item) =>
+          Number(item.score),
+        )
+        .filter(
+          (score) =>
+            Number.isFinite(score),
+        )
+
     const averageScore =
-      allGrades.length > 0
+      validAllScores.length > 0
         ? Number(
             (
-              allGrades.reduce(
-                (sum, item) =>
-                  sum +
-                  Number(item.score),
+              validAllScores.reduce(
+                (sum, score) =>
+                  sum + score,
                 0,
               ) /
-              allGrades.length
+              validAllScores.length
             ).toFixed(1),
           )
         : 0
@@ -457,9 +615,9 @@ export async function GET(request: Request) {
           student.needsAttention,
       ).length
 
-    // =========================
+    // ==========================================
     // FILTER OPTIONS
-    // =========================
+    // ==========================================
 
     const filterClasses =
       classList.map((item) => ({
@@ -468,15 +626,20 @@ export async function GET(request: Request) {
           item.class_name,
       }))
 
-    const subjects = Array.from(
-      new Set(
-        classList
-          .map(
-            (item) => item.subject,
-          )
-          .filter(Boolean),
-      ),
-    ).sort()
+    const subjects =
+      Array.from(
+        new Set(
+          classList
+            .map(
+              (item) => item.subject,
+            )
+            .filter(Boolean),
+        ),
+      ).sort()
+
+    // ==========================================
+    // RESPONSE
+    // ==========================================
 
     return NextResponse.json({
       summary: {
@@ -485,12 +648,10 @@ export async function GET(request: Request) {
         averageScore,
         studentsNeedAttention,
       },
-
       filters: {
         classes: filterClasses,
         subjects,
       },
-
       students: result,
     })
   } catch (error) {

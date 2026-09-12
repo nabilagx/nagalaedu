@@ -324,7 +324,7 @@ export default function TutorClassesPage() {
               ].join(" ")}
             />
 
-            Refresh
+            Perbarui Data
           </button>
         </div>
 

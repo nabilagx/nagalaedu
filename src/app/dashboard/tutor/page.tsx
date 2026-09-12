@@ -215,7 +215,7 @@ export default function TutorDashboardPage() {
               }`}
             />
 
-            Refresh
+            Perbarui Data
           </button>
         </div>
 

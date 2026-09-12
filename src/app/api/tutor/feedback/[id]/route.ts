@@ -7,9 +7,7 @@ type Params = {
   }>
 }
 
-async function getTutorAndGrade(
-  id: string
-) {
+async function getTutorAndGrade(id: string) {
   const supabase = await createClient()
 
   const {
@@ -29,12 +27,11 @@ async function getTutorAndGrade(
     }
   }
 
-  const { data: profile } =
-    await supabase
-      .from("profiles")
-      .select("role_id")
-      .eq("id", user.id)
-      .single()
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("role_id")
+    .eq("id", user.id)
+    .single()
 
   if (!profile || profile.role_id !== 2) {
     return {
@@ -42,20 +39,21 @@ async function getTutorAndGrade(
       user,
       grade: null,
       errorResponse: NextResponse.json(
-        { error: "Akses hanya untuk tutor." },
+        {
+          error: "Akses hanya untuk tutor.",
+        },
         { status: 403 }
       ),
     }
   }
 
-  const { data: grade, error: gradeError } =
-    await supabase
-      .from("grades")
-      .select(
-        "id, enrollment_id, subject, assessment_name, score, feedback_notes, created_at, updated_at"
-      )
-      .eq("id", id)
-      .single()
+  const { data: grade, error: gradeError } = await supabase
+    .from("grades")
+    .select(
+      "id, enrollment_id, subject, assessment_name, score, feedback_notes, created_at, updated_at"
+    )
+    .eq("id", id)
+    .single()
 
   if (gradeError || !grade) {
     return {
@@ -63,20 +61,21 @@ async function getTutorAndGrade(
       user,
       grade: null,
       errorResponse: NextResponse.json(
-        { error: "Feedback tidak ditemukan." },
+        {
+          error: "Feedback tidak ditemukan.",
+        },
         { status: 404 }
       ),
     }
   }
 
-  const { data: enrollment } =
-    await supabase
-      .from("class_enrollments")
-      .select(
-        "id, class_id, student_id, status"
-      )
-      .eq("id", grade.enrollment_id)
-      .single()
+  const { data: enrollment } = await supabase
+    .from("class_enrollments")
+    .select(
+      "id, class_id, student_id, status"
+    )
+    .eq("id", grade.enrollment_id)
+    .single()
 
   if (!enrollment) {
     return {
@@ -84,21 +83,22 @@ async function getTutorAndGrade(
       user,
       grade: null,
       errorResponse: NextResponse.json(
-        { error: "Enrollment tidak ditemukan." },
+        {
+          error: "Enrollment tidak ditemukan.",
+        },
         { status: 404 }
       ),
     }
   }
 
-  const { data: tutorClass } =
-    await supabase
-      .from("classes")
-      .select(
-        "id, class_name, subject, description, schedule_day, schedule_start, schedule_end, status"
-      )
-      .eq("id", enrollment.class_id)
-      .eq("tutor_id", user.id)
-      .single()
+  const { data: tutorClass } = await supabase
+    .from("classes")
+    .select(
+      "id, class_name, subject, description, schedule_day, schedule_start, schedule_end, status"
+    )
+    .eq("id", enrollment.class_id)
+    .eq("tutor_id", user.id)
+    .single()
 
   if (!tutorClass) {
     return {
@@ -134,8 +134,7 @@ export async function GET(
   try {
     const { id } = await params
 
-    const result =
-      await getTutorAndGrade(id)
+    const result = await getTutorAndGrade(id)
 
     if (result.errorResponse) {
       return result.errorResponse
@@ -146,17 +145,16 @@ export async function GET(
       grade,
     } = result
 
-    const { data: student } =
-      await supabase
-        .from("students")
-        .select(
-          "id, student_name, grade_level, school_name, phone_number, status"
-        )
-        .eq(
-          "id",
-          grade.enrollment.student_id
-        )
-        .single()
+    const { data: student } = await supabase
+      .from("students")
+      .select(
+        "id, student_name, grade_level, school_name, phone_number, status"
+      )
+      .eq(
+        "id",
+        grade.enrollment.student_id
+      )
+      .single()
 
     return NextResponse.json({
       feedback: {
@@ -191,10 +189,12 @@ export async function GET(
           grade.tutorClass.schedule_end,
         class_status:
           grade.tutorClass.status,
-        subject: grade.subject,
+        subject:
+          grade.subject,
         assessment_name:
           grade.assessment_name,
-        score: grade.score,
+        score:
+          grade.score,
         feedback_notes:
           grade.feedback_notes,
         created_at:
@@ -210,7 +210,10 @@ export async function GET(
     )
 
     return NextResponse.json(
-      { error: "Terjadi kesalahan pada server." },
+      {
+        error:
+          "Terjadi kesalahan pada server.",
+      },
       { status: 500 }
     )
   }
@@ -223,8 +226,7 @@ export async function PATCH(
   try {
     const { id } = await params
 
-    const result =
-      await getTutorAndGrade(id)
+    const result = await getTutorAndGrade(id)
 
     if (result.errorResponse) {
       return result.errorResponse
@@ -338,15 +340,17 @@ export async function PATCH(
     updates.updated_at =
       new Date().toISOString()
 
-    const { data: updatedGrade, error } =
-      await supabase
-        .from("grades")
-        .update(updates)
-        .eq("id", id)
-        .select(
-          "id, enrollment_id, subject, assessment_name, score, feedback_notes, created_at, updated_at"
-        )
-        .single()
+    const {
+      data: updatedGrade,
+      error,
+    } = await supabase
+      .from("grades")
+      .update(updates)
+      .eq("id", id)
+      .select(
+        "id, enrollment_id, subject, assessment_name, score, feedback_notes, created_at, updated_at"
+      )
+      .single()
 
     if (error) {
       console.error(
@@ -355,7 +359,10 @@ export async function PATCH(
       )
 
       return NextResponse.json(
-        { error: "Gagal memperbarui feedback." },
+        {
+          error:
+            "Gagal memperbarui feedback.",
+        },
         { status: 500 }
       )
     }
@@ -370,7 +377,10 @@ export async function PATCH(
     )
 
     return NextResponse.json(
-      { error: "Terjadi kesalahan pada server." },
+      {
+        error:
+          "Terjadi kesalahan pada server.",
+      },
       { status: 500 }
     )
   }
@@ -383,35 +393,95 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const result =
-      await getTutorAndGrade(id)
+    const result = await getTutorAndGrade(id)
 
     if (result.errorResponse) {
       return result.errorResponse
     }
 
-    const { supabase } = result
+    const {
+      supabase,
+      grade,
+    } = result
 
-    const { error } =
-      await supabase
-        .from("grades")
-        .delete()
-        .eq("id", id)
-
-    if (error) {
+    /*
+     * Gunakan select() setelah delete agar kita
+     * benar-benar tahu apakah row berhasil dihapus.
+     *
+     * Ini penting karena pada Supabase + RLS,
+     * operasi DELETE dapat tidak menghasilkan
+     * error walaupun tidak ada row yang terhapus.
+     */
+    const {
+      data: deletedGrade,
+      error: deleteError,
+    } = await supabase
+      .from("grades")
+      .delete()
+      .eq("id", id)
+      .select("id")
+    
+    if (deleteError) {
       console.error(
         "Tutor feedback delete error:",
-        error
+        deleteError
       )
 
       return NextResponse.json(
-        { error: "Gagal menghapus feedback." },
+        {
+          error:
+            deleteError.message ||
+            "Gagal menghapus feedback.",
+        },
         { status: 500 }
       )
     }
 
+    /*
+     * Jika array kosong, berarti Supabase tidak
+     * benar-benar menghapus row.
+     *
+     * Penyebab paling mungkin:
+     * DELETE policy pada tabel grades belum
+     * mengizinkan tutor menghapus row tersebut.
+     */
+    if (
+      !deletedGrade ||
+      deletedGrade.length === 0
+    ) {
+      console.error(
+        "Tutor feedback delete returned no deleted rows.",
+        {
+          feedbackId: id,
+          tutorId: result.user?.id,
+          enrollmentId:
+            grade.enrollment_id,
+        }
+      )
+
+      return NextResponse.json(
+        {
+          error:
+            "Feedback tidak berhasil dihapus. Kemungkinan policy DELETE pada tabel grades belum mengizinkan tutor menghapus data ini.",
+        },
+        { status: 403 }
+      )
+    }
+
+    console.log(
+      "Tutor feedback deleted successfully:",
+      {
+        feedbackId: id,
+        tutorId: result.user?.id,
+        enrollmentId:
+          grade.enrollment_id,
+      }
+    )
+
     return NextResponse.json({
-      message: "Feedback berhasil dihapus.",
+      message:
+        "Feedback berhasil dihapus.",
+      deletedId: deletedGrade[0].id,
     })
   } catch (error) {
     console.error(
@@ -420,7 +490,10 @@ export async function DELETE(
     )
 
     return NextResponse.json(
-      { error: "Terjadi kesalahan pada server." },
+      {
+        error:
+          "Terjadi kesalahan pada server.",
+      },
       { status: 500 }
     )
   }

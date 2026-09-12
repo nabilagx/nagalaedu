@@ -5,19 +5,30 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 type StudentStatus = 'ACTIVE' | 'INACTIVE'
 
-function cleanString(
-  value: unknown
-): string {
-  return typeof value === 'string'
-    ? value.trim()
-    : ''
+const ALLOWED_GRADE_LEVELS = [
+  'TK',
+  'SD 1',
+  'SD 2',
+  'SD 3',
+  'SD 4',
+  'SD 5',
+  'SD 6',
+  'SMP 7',
+  'SMP 8',
+  'SMP 9',
+  'SMA 10',
+  'SMA 11',
+  'SMA 12',
+] as const
+
+function cleanString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 function normalizeNullableString(
   value: unknown
 ): string | null {
   const cleaned = cleanString(value)
-
   return cleaned || null
 }
 
@@ -30,22 +41,153 @@ function isValidStatus(
   )
 }
 
+function isValidUuid(value: unknown): boolean {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  )
+}
+
+function isValidGradeLevel(
+  value: unknown
+): boolean {
+  return (
+    typeof value === 'string' &&
+    ALLOWED_GRADE_LEVELS.includes(
+      value as (typeof ALLOWED_GRADE_LEVELS)[number]
+    )
+  )
+}
+
+function isValidStudentName(
+  value: unknown
+): value is string {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const cleaned = value.trim()
+
+  if (
+    cleaned.length < 2 ||
+    cleaned.length > 100
+  ) {
+    return false
+  }
+
+  // Menolak control characters.
+  if (/[\u0000-\u001F\u007F]/.test(cleaned)) {
+    return false
+  }
+
+  return true
+}
+
+function isValidSchoolName(
+  value: unknown
+): boolean {
+  if (value === null || value === undefined) {
+    return true
+  }
+
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const cleaned = value.trim()
+
+  if (cleaned.length === 0) {
+    return true
+  }
+
+  if (cleaned.length > 150) {
+    return false
+  }
+
+  if (/[\u0000-\u001F\u007F]/.test(cleaned)) {
+    return false
+  }
+
+  return true
+}
+
+function isValidPhoneNumber(
+  value: unknown
+): value is string {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  const cleaned = value.trim()
+
+  return /^\d{10,13}$/.test(cleaned)
+}
+
+async function parseJsonBody(
+  request: NextRequest
+): Promise<
+  | {
+      success: true
+      body: Record<string, unknown>
+    }
+  | {
+      success: false
+      response: NextResponse
+    }
+> {
+  try {
+    const body = await request.json()
+
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      Array.isArray(body)
+    ) {
+      return {
+        success: false,
+        response: NextResponse.json(
+          {
+            error:
+              'Format data yang dikirim tidak valid.',
+          },
+          { status: 400 }
+        ),
+      }
+    }
+
+    return {
+      success: true,
+      body: body as Record<string, unknown>,
+    }
+  } catch {
+    return {
+      success: false,
+      response: NextResponse.json(
+        {
+          error:
+            'Format JSON tidak valid.',
+        },
+        { status: 400 }
+      ),
+    }
+  }
+}
+
 /**
- * GET
- *
  * GET /api/founder/students
  *
  * Mengambil seluruh data siswa.
  *
- * Optional:
  * GET /api/founder/students?parents=true
  *
- * Digunakan halaman Founder untuk mengambil
- * daftar akun Orang Tua yang dapat dihubungkan
- * ke siswa.
+ * Mengambil daftar akun Orang Tua.
  */
-
-export async function GET(request: NextRequest) {
+export async function GET(
+  request: NextRequest
+) {
   const auth = await requireFounder()
 
   if (!auth.authorized) {
@@ -53,29 +195,42 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const { searchParams } = new URL(request.url)
-    const parentsOnly = searchParams.get('parents') === 'true'
+    const { searchParams } =
+      new URL(request.url)
+
+    const parentsOnly =
+      searchParams.get('parents') === 'true'
 
     const admin = createAdminClient()
 
     // ==========================================
-    // GET DAFTAR PARENT
+    // GET PARENT
     // ==========================================
+
     if (parentsOnly) {
-      const { data: parents, error } = await admin
+      const {
+        data: parents,
+        error,
+      } = await admin
         .from('profiles')
-        .select('id, full_name, phone_number')
+        .select(
+          'id, full_name, phone_number'
+        )
         .eq('role_id', 3)
         .order('full_name', {
           ascending: true,
         })
 
       if (error) {
-        console.error('GET PARENTS ERROR:', error)
+        console.error(
+          'GET PARENTS ERROR:',
+          error
+        )
 
         return NextResponse.json(
           {
-            error: 'Gagal mengambil data orang tua.',
+            error:
+              'Gagal mengambil data orang tua.',
           },
           { status: 500 }
         )
@@ -87,45 +242,56 @@ export async function GET(request: NextRequest) {
     }
 
     // ==========================================
-    // GET DAFTAR SISWA
+    // GET STUDENTS
     // ==========================================
-    const { data: students, error: studentsError } =
-      await admin
-        .from('students')
-        .select(`
-          id,
-          parent_id,
-          student_name,
-          grade_level,
-          school_name,
-          phone_number,
-          status
-        `)
-        .order('student_name', {
-          ascending: true,
-        })
+
+    const {
+      data: students,
+      error: studentsError,
+    } = await admin
+      .from('students')
+      .select(`
+        id,
+        parent_id,
+        student_name,
+        grade_level,
+        school_name,
+        phone_number,
+        status
+      `)
+      .order('student_name', {
+        ascending: true,
+      })
 
     if (studentsError) {
-      console.error('GET STUDENTS ERROR:', studentsError)
+      console.error(
+        'GET STUDENTS ERROR:',
+        studentsError
+      )
 
       return NextResponse.json(
         {
-          error: 'Gagal mengambil data siswa.',
+          error:
+            'Gagal mengambil data siswa.',
         },
         { status: 500 }
       )
     }
 
     // ==========================================
-    // AMBIL DATA PARENT SECARA TERPISAH
-    // Tidak bergantung pada nama foreign key
+    // GET PARENTS TERKAIT SISWA
     // ==========================================
+
     const parentIds = [
       ...new Set(
         (students ?? [])
-          .map((student) => student.parent_id)
+          .map(
+            (student) =>
+              student.parent_id
+          )
           .filter(
-            (id): id is string => Boolean(id)
+            (id): id is string =>
+              Boolean(id)
           )
       ),
     ]
@@ -137,12 +303,16 @@ export async function GET(request: NextRequest) {
     }> = []
 
     if (parentIds.length > 0) {
-      const { data: parentData, error: parentError } =
-        await admin
-          .from('profiles')
-          .select('id, full_name, phone_number')
-          .in('id', parentIds)
-          .eq('role_id', 3)
+      const {
+        data: parentData,
+        error: parentError,
+      } = await admin
+        .from('profiles')
+        .select(
+          'id, full_name, phone_number'
+        )
+        .in('id', parentIds)
+        .eq('role_id', 3)
 
       if (parentError) {
         console.error(
@@ -163,22 +333,29 @@ export async function GET(request: NextRequest) {
     }
 
     // ==========================================
-    // GABUNGKAN DATA SISWA + PARENT
+    // MAP PARENT
     // ==========================================
+
     const parentMap = new Map(
       parents.map((parent) => [
         parent.id,
         {
-          full_name: parent.full_name,
-          phone_number: parent.phone_number,
+          full_name:
+            parent.full_name,
+          phone_number:
+            parent.phone_number,
         },
       ])
     )
 
-    const result = (students ?? []).map((student) => ({
+    const result = (
+      students ?? []
+    ).map((student) => ({
       ...student,
       parent: student.parent_id
-        ? parentMap.get(student.parent_id) ?? null
+        ? parentMap.get(
+            student.parent_id
+          ) ?? null
         : null,
     }))
 
@@ -186,27 +363,29 @@ export async function GET(request: NextRequest) {
       students: result,
     })
   } catch (error) {
-    console.error('GET STUDENTS UNEXPECTED ERROR:', error)
+    console.error(
+      'GET STUDENTS UNEXPECTED ERROR:',
+      error
+    )
 
     return NextResponse.json(
       {
-        error: 'Terjadi kesalahan pada server.',
+        error:
+          'Terjadi kesalahan pada server.',
       },
       { status: 500 }
     )
   }
 }
 
-
 /**
- * POST
- *
  * POST /api/founder/students
  *
  * Membuat data siswa baru.
  */
-
-export async function POST(request: NextRequest) {
+export async function POST(
+  request: NextRequest
+) {
   const auth = await requireFounder()
 
   if (!auth.authorized) {
@@ -214,51 +393,167 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json()
+    // ==========================================
+    // PARSE JSON DENGAN AMAN
+    // ==========================================
 
-    const studentName = cleanString(body.studentName)
-    const gradeLevel = cleanString(body.gradeLevel)
-    const schoolName = normalizeNullableString(body.schoolName)
-    const phoneNumber = normalizeNullableString(body.phoneNumber)
-    const parentId = normalizeNullableString(body.parentId)
+    const parsed =
+      await parseJsonBody(request)
 
-    const status = isValidStatus(body.status)
-      ? body.status
-      : 'ACTIVE'
+    if (!parsed.success) {
+      return parsed.response
+    }
+
+    const body = parsed.body
 
     // ==========================================
-    // VALIDASI
+    // NORMALIZE
     // ==========================================
-    if (!studentName) {
+
+    const studentName =
+      cleanString(body.studentName)
+
+    const gradeLevel =
+      cleanString(body.gradeLevel)
+
+    const schoolName =
+      normalizeNullableString(
+        body.schoolName
+      )
+
+    const phoneNumber =
+      cleanString(body.phoneNumber)
+
+    const parentId =
+      normalizeNullableString(
+        body.parentId
+      )
+
+    // Status wajib valid.
+    // Jangan fallback diam-diam ke ACTIVE.
+    const status = body.status
+
+    // ==========================================
+    // VALIDASI NAMA
+    // ==========================================
+
+    if (
+      !isValidStudentName(
+        studentName
+      )
+    ) {
       return NextResponse.json(
         {
-          error: 'Nama siswa wajib diisi.',
+          error:
+            'Nama siswa harus terdiri dari 2–100 karakter.',
         },
         { status: 400 }
       )
     }
 
-    if (!gradeLevel) {
+    // ==========================================
+    // VALIDASI GRADE
+    // ==========================================
+
+    if (
+      !isValidGradeLevel(
+        gradeLevel
+      )
+    ) {
       return NextResponse.json(
         {
-          error: 'Kelas siswa wajib dipilih.',
+          error:
+            'Kelas siswa tidak valid.',
         },
         { status: 400 }
       )
     }
 
-    const admin = createAdminClient()
+    // ==========================================
+    // VALIDASI SEKOLAH
+    // ==========================================
+
+    if (
+      !isValidSchoolName(
+        schoolName
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Nama sekolah tidak valid atau melebihi 150 karakter.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI PHONE
+    // ==========================================
+
+    if (
+      !isValidPhoneNumber(
+        phoneNumber
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Nomor telepon wajib diisi dan harus terdiri dari 10–13 digit angka.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI STATUS
+    // ==========================================
+
+    if (
+      !isValidStatus(status)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Status siswa tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI PARENT UUID
+    // ==========================================
+
+    if (
+      parentId &&
+      !isValidUuid(parentId)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'ID orang tua tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    const admin =
+      createAdminClient()
 
     // ==========================================
     // VALIDASI PARENT
     // ==========================================
+
     if (parentId) {
-      const { data: parent, error: parentError } =
-        await admin
-          .from('profiles')
-          .select('id, role_id')
-          .eq('id', parentId)
-          .maybeSingle()
+      const {
+        data: parent,
+        error: parentError,
+      } = await admin
+        .from('profiles')
+        .select('id, role_id')
+        .eq('id', parentId)
+        .maybeSingle()
 
       if (parentError) {
         console.error(
@@ -285,7 +580,9 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      if (parent.role_id !== 3) {
+      if (
+        parent.role_id !== 3
+      ) {
         return NextResponse.json(
           {
             error:
@@ -297,29 +594,37 @@ export async function POST(request: NextRequest) {
     }
 
     // ==========================================
-    // INSERT SISWA
+    // INSERT
     // ==========================================
-    const { data: student, error: insertError } =
-      await admin
-        .from('students')
-        .insert({
-          student_name: studentName,
-          grade_level: gradeLevel,
-          school_name: schoolName,
-          phone_number: phoneNumber,
-          parent_id: parentId,
-          status,
-        })
-        .select(`
-          id,
-          parent_id,
-          student_name,
-          grade_level,
-          school_name,
-          phone_number,
-          status
-        `)
-        .single()
+
+    const {
+      data: student,
+      error: insertError,
+    } = await admin
+      .from('students')
+      .insert({
+        student_name:
+          studentName,
+        grade_level:
+          gradeLevel,
+        school_name:
+          schoolName,
+        phone_number:
+          phoneNumber,
+        parent_id:
+          parentId,
+        status,
+      })
+      .select(`
+        id,
+        parent_id,
+        student_name,
+        grade_level,
+        school_name,
+        phone_number,
+        status
+      `)
+      .single()
 
     if (insertError) {
       console.error(
@@ -327,7 +632,10 @@ export async function POST(request: NextRequest) {
         insertError
       )
 
-      if (insertError.code === '23505') {
+      if (
+        insertError.code ===
+        '23505'
+      ) {
         return NextResponse.json(
           {
             error:
@@ -337,7 +645,10 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      if (insertError.code === '23503') {
+      if (
+        insertError.code ===
+        '23503'
+      ) {
         return NextResponse.json(
           {
             error:
@@ -350,7 +661,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            insertError.message ||
             'Gagal menambahkan siswa.',
         },
         { status: 500 }
@@ -358,19 +668,26 @@ export async function POST(request: NextRequest) {
     }
 
     // ==========================================
-    // AMBIL DATA PARENT TERPISAH
-    // Tidak menggunakan relationship FK
+    // GET PARENT RESULT
     // ==========================================
+
     let parent = null
 
     if (student.parent_id) {
-      const { data: parentData, error: parentError } =
-        await admin
-          .from('profiles')
-          .select('id, full_name, phone_number')
-          .eq('id', student.parent_id)
-          .eq('role_id', 3)
-          .maybeSingle()
+      const {
+        data: parentData,
+        error: parentError,
+      } = await admin
+        .from('profiles')
+        .select(
+          'id, full_name, phone_number'
+        )
+        .eq(
+          'id',
+          student.parent_id
+        )
+        .eq('role_id', 3)
+        .maybeSingle()
 
       if (parentError) {
         console.error(
@@ -382,9 +699,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ==========================================
-    // RESPONSE
-    // ==========================================
     return NextResponse.json(
       {
         student: {
@@ -409,6 +723,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-
-
-

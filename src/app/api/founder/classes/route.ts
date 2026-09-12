@@ -1,20 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+
 import { requireFounder } from '@/lib/auth/requireFounder'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-function cleanString(value: unknown) {
-  if (typeof value !== 'string') return ''
-  return value.trim()
-}
-
-function normalizeNullableString(value: unknown) {
-  const cleaned = cleanString(value)
-  return cleaned ? cleaned : null
-}
-
-function isValidStatus(value: unknown): value is 'ACTIVE' | 'INACTIVE' {
-  return value === 'ACTIVE' || value === 'INACTIVE'
-}
+type ClassStatus = 'ACTIVE' | 'INACTIVE'
 
 const VALID_DAYS = [
   'SENIN',
@@ -24,18 +13,87 @@ const VALID_DAYS = [
   'JUMAT',
   'SABTU',
   'MINGGU',
-]
+] as const
+
+function cleanString(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value.trim()
+}
+
+function normalizeNullableString(
+  value: unknown
+): string | null {
+  const cleaned = cleanString(value)
+  return cleaned ? cleaned : null
+}
+
+function hasControlChars(value: string): boolean {
+  return /[\u0000-\u001F\u007F]/.test(value)
+}
+
+function isValidStatus(
+  value: unknown
+): value is ClassStatus {
+  return value === 'ACTIVE' || value === 'INACTIVE'
+}
 
 function isValidDay(value: unknown): value is string {
   return (
     typeof value === 'string' &&
-    VALID_DAYS.includes(value)
+    VALID_DAYS.includes(
+      value as (typeof VALID_DAYS)[number]
+    )
   )
+}
+
+function isValidTime(value: unknown): boolean {
+  return (
+    typeof value === 'string' &&
+    /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
+  )
+}
+
+function timeToMinutes(value: string): number {
+  const [hours, minutes] = value.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+function isValidUUID(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    value
+  )
+}
+
+function isPlainObject(
+  value: unknown
+): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
+  )
+}
+
+function getDatabaseErrorCode(error: unknown) {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as { code?: unknown }).code ===
+      'string'
+  ) {
+    return (error as { code: string }).code
+  }
+
+  return null
 }
 
 // ==========================================
 // GET
 // ==========================================
+
 export async function GET(request: NextRequest) {
   const auth = await requireFounder()
 
@@ -45,24 +103,32 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const tutorsOnly = searchParams.get('tutors') === 'true'
+
+    const tutorsOnly =
+      searchParams.get('tutors') === 'true'
 
     const admin = createAdminClient()
 
     // ==========================================
     // GET DAFTAR TUTOR
     // ==========================================
+
     if (tutorsOnly) {
       const { data: tutors, error } = await admin
         .from('profiles')
-        .select('id, full_name, phone_number')
+        .select(
+          'id, full_name, phone_number'
+        )
         .eq('role_id', 2)
         .order('full_name', {
           ascending: true,
         })
 
       if (error) {
-        console.error('GET TUTORS ERROR:', error)
+        console.error(
+          'GET TUTORS ERROR:',
+          error
+        )
 
         return NextResponse.json(
           {
@@ -80,6 +146,7 @@ export async function GET(request: NextRequest) {
     // ==========================================
     // GET KELAS
     // ==========================================
+
     const { data: classes, error: classesError } =
       await admin
         .from('classes')
@@ -113,9 +180,9 @@ export async function GET(request: NextRequest) {
     }
 
     // ==========================================
-    // AMBIL DATA TUTOR TERPISAH
-    // Tidak bergantung pada nama foreign key
+    // AMBIL DATA TUTOR
     // ==========================================
+
     const tutorIds = [
       ...new Set(
         (classes ?? [])
@@ -136,7 +203,9 @@ export async function GET(request: NextRequest) {
       const { data: tutorData, error: tutorError } =
         await admin
           .from('profiles')
-          .select('id, full_name, phone_number')
+          .select(
+            'id, full_name, phone_number'
+          )
           .in('id', tutorIds)
           .eq('role_id', 2)
 
@@ -148,7 +217,8 @@ export async function GET(request: NextRequest) {
 
         return NextResponse.json(
           {
-            error: 'Gagal mengambil data tutor kelas.',
+            error:
+              'Gagal mengambil data tutor kelas.',
           },
           { status: 500 }
         )
@@ -167,12 +237,14 @@ export async function GET(request: NextRequest) {
       ])
     )
 
-    const result = (classes ?? []).map((item) => ({
-      ...item,
-      tutor: item.tutor_id
-        ? tutorMap.get(item.tutor_id) ?? null
-        : null,
-    }))
+    const result = (classes ?? []).map(
+      (item) => ({
+        ...item,
+        tutor: item.tutor_id
+          ? tutorMap.get(item.tutor_id) ?? null
+          : null,
+      })
+    )
 
     return NextResponse.json({
       classes: result,
@@ -195,6 +267,7 @@ export async function GET(request: NextRequest) {
 // ==========================================
 // POST
 // ==========================================
+
 export async function POST(request: NextRequest) {
   const auth = await requireFounder()
 
@@ -203,33 +276,71 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json()
+    let body: unknown
 
-    const className = cleanString(body.className)
-    const subject = cleanString(body.subject)
-    const description = normalizeNullableString(
-      body.description
-    )
-    const tutorId = normalizeNullableString(
-      body.tutorId
-    )
-    const scheduleDay = cleanString(
-      body.scheduleDay
-    )
-    const scheduleStart = cleanString(
-      body.scheduleStart
-    )
-    const scheduleEnd = cleanString(
-      body.scheduleEnd
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json(
+        {
+          error: 'Format JSON tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (!isPlainObject(body)) {
+      return NextResponse.json(
+        {
+          error: 'Data request tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    const className = cleanString(
+      body.className
     )
 
-    const status = isValidStatus(body.status)
-      ? body.status
-      : 'ACTIVE'
+    const subject = cleanString(
+      body.subject
+    )
+
+    const description =
+      normalizeNullableString(
+        body.description
+      )
+
+    const tutorId =
+      normalizeNullableString(
+        body.tutorId
+      )
+
+    const scheduleDay =
+      cleanString(body.scheduleDay)
+
+    const scheduleStart =
+      cleanString(body.scheduleStart)
+
+    const scheduleEnd =
+      cleanString(body.scheduleEnd)
+
+    // Jangan default secara diam-diam
+    if (!isValidStatus(body.status)) {
+      return NextResponse.json(
+        {
+          error: 'Status kelas tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    const status = body.status
 
     // ==========================================
-    // VALIDASI
+    // VALIDASI CLASS NAME
     // ==========================================
+
     if (!className) {
       return NextResponse.json(
         {
@@ -239,14 +350,113 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!subject) {
+    if (className.length < 2) {
       return NextResponse.json(
         {
-          error: 'Mata pelajaran wajib diisi.',
+          error:
+            'Nama kelas minimal 2 karakter.',
         },
         { status: 400 }
       )
     }
+
+    if (className.length > 100) {
+      return NextResponse.json(
+        {
+          error:
+            'Nama kelas maksimal 100 karakter.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (hasControlChars(className)) {
+      return NextResponse.json(
+        {
+          error:
+            'Nama kelas mengandung karakter tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI SUBJECT
+    // ==========================================
+
+    if (!subject) {
+      return NextResponse.json(
+        {
+          error:
+            'Mata pelajaran wajib diisi.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (subject.length < 2) {
+      return NextResponse.json(
+        {
+          error:
+            'Mata pelajaran minimal 2 karakter.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (subject.length > 100) {
+      return NextResponse.json(
+        {
+          error:
+            'Mata pelajaran maksimal 100 karakter.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (hasControlChars(subject)) {
+      return NextResponse.json(
+        {
+          error:
+            'Mata pelajaran mengandung karakter tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI DESCRIPTION
+    // ==========================================
+
+    if (
+      description !== null &&
+      description.length > 500
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Deskripsi maksimal 500 karakter.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (
+      description !== null &&
+      hasControlChars(description)
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            'Deskripsi mengandung karakter tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI TUTOR ID
+    // ==========================================
 
     if (!tutorId) {
       return NextResponse.json(
@@ -257,6 +467,19 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    if (!isValidUUID(tutorId)) {
+      return NextResponse.json(
+        {
+          error: 'ID tutor tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    // ==========================================
+    // VALIDASI HARI
+    // ==========================================
+
     if (!isValidDay(scheduleDay)) {
       return NextResponse.json(
         {
@@ -265,6 +488,10 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    // ==========================================
+    // VALIDASI WAKTU
+    // ==========================================
 
     if (!scheduleStart || !scheduleEnd) {
       return NextResponse.json(
@@ -276,7 +503,30 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (scheduleStart >= scheduleEnd) {
+    if (!isValidTime(scheduleStart)) {
+      return NextResponse.json(
+        {
+          error:
+            'Format jam mulai tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (!isValidTime(scheduleEnd)) {
+      return NextResponse.json(
+        {
+          error:
+            'Format jam selesai tidak valid.',
+        },
+        { status: 400 }
+      )
+    }
+
+    if (
+      timeToMinutes(scheduleEnd) <=
+      timeToMinutes(scheduleStart)
+    ) {
       return NextResponse.json(
         {
           error:
@@ -289,8 +539,9 @@ export async function POST(request: NextRequest) {
     const admin = createAdminClient()
 
     // ==========================================
-    // VALIDASI TUTOR
+    // VALIDASI TUTOR DI DATABASE
     // ==========================================
+
     const { data: tutor, error: tutorError } =
       await admin
         .from('profiles')
@@ -306,7 +557,8 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json(
         {
-          error: 'Gagal memverifikasi tutor.',
+          error:
+            'Gagal memverifikasi tutor.',
         },
         { status: 500 }
       )
@@ -334,31 +586,34 @@ export async function POST(request: NextRequest) {
     // ==========================================
     // INSERT
     // ==========================================
-    const { data: classData, error: insertError } =
-      await admin
-        .from('classes')
-        .insert({
-          tutor_id: tutorId,
-          class_name: className,
-          subject,
-          description,
-          schedule_day: scheduleDay,
-          schedule_start: scheduleStart,
-          schedule_end: scheduleEnd,
-          status,
-        })
-        .select(`
-          id,
-          tutor_id,
-          class_name,
-          subject,
-          description,
-          schedule_day,
-          schedule_start,
-          schedule_end,
-          status
-        `)
-        .single()
+
+    const {
+      data: classData,
+      error: insertError,
+    } = await admin
+      .from('classes')
+      .insert({
+        tutor_id: tutorId,
+        class_name: className,
+        subject,
+        description,
+        schedule_day: scheduleDay,
+        schedule_start: scheduleStart,
+        schedule_end: scheduleEnd,
+        status,
+      })
+      .select(`
+        id,
+        tutor_id,
+        class_name,
+        subject,
+        description,
+        schedule_day,
+        schedule_start,
+        schedule_end,
+        status
+      `)
+      .single()
 
     if (insertError) {
       console.error(
@@ -366,16 +621,20 @@ export async function POST(request: NextRequest) {
         insertError
       )
 
-      if (insertError.code === '23503') {
+      const errorCode =
+        getDatabaseErrorCode(insertError)
+
+      if (errorCode === '23503') {
         return NextResponse.json(
           {
-            error: 'Tutor yang dipilih tidak valid.',
+            error:
+              'Tutor yang dipilih tidak valid.',
           },
           { status: 400 }
         )
       }
 
-      if (insertError.code === '23505') {
+      if (errorCode === '23505') {
         return NextResponse.json(
           {
             error:
@@ -388,7 +647,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            insertError.message ||
             'Gagal menambahkan kelas.',
         },
         { status: 500 }
@@ -396,14 +654,17 @@ export async function POST(request: NextRequest) {
     }
 
     // ==========================================
-    // AMBIL TUTOR TERPISAH
+    // AMBIL TUTOR
     // ==========================================
+
     let tutorData = null
 
     if (classData.tutor_id) {
       const { data } = await admin
         .from('profiles')
-        .select('id, full_name, phone_number')
+        .select(
+          'id, full_name, phone_number'
+        )
         .eq('id', classData.tutor_id)
         .eq('role_id', 2)
         .maybeSingle()
@@ -434,4 +695,3 @@ export async function POST(request: NextRequest) {
     )
   }
 }
-

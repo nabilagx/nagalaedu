@@ -3,11 +3,14 @@
 import {
   FormEvent,
   useEffect,
+  useMemo,
   useState,
 } from 'react'
 
 import {
   Edit3,
+  Eye,
+  EyeOff,
   Loader2,
   LockKeyhole,
   Mail,
@@ -18,6 +21,9 @@ import {
   Users,
   X,
   Phone,
+  Search,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react'
 
 type UserRole = {
@@ -40,6 +46,13 @@ type User = {
     | null
 }
 
+type ToastType = 'success' | 'error'
+
+type Toast = {
+  type: ToastType
+  message: string
+}
+
 const roles: UserRole[] = [
   {
     id: 1,
@@ -58,7 +71,7 @@ const roles: UserRole[] = [
 function getRoleName(roleId: number) {
   return (
     roles.find(
-      (role) => role.id === roleId
+      (role) => role.id === roleId,
     )?.role_name ?? 'Tidak diketahui'
   )
 }
@@ -81,6 +94,15 @@ function getInitial(name: string) {
   )
 }
 
+function getUsersByRole(
+  users: User[],
+  roleId: number,
+) {
+  return users.filter(
+    (user) => user.role_id === roleId,
+  )
+}
+
 export default function FounderUsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
@@ -96,8 +118,14 @@ export default function FounderUsersPage() {
   const [deletingId, setDeletingId] =
     useState<string | null>(null)
 
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [searchQuery, setSearchQuery] =
+    useState('')
+
+  const [toast, setToast] =
+    useState<Toast | null>(null)
+
+  const [showPassword, setShowPassword] =
+    useState(false)
 
   const [form, setForm] = useState({
     email: '',
@@ -107,13 +135,41 @@ export default function FounderUsersPage() {
     roleId: '3',
   })
 
+  /*
+   * ============================================================
+   * TOAST
+   * ============================================================
+   */
+
+  function showToast(
+    type: ToastType,
+    message: string,
+  ) {
+    setToast({
+      type,
+      message,
+    })
+
+    window.setTimeout(() => {
+      setToast(null)
+    }, 3500)
+  }
+
+  /*
+   * ============================================================
+   * LOAD USERS
+   * ============================================================
+   */
+
   async function loadUsers() {
     try {
       setLoading(true)
-      setError('')
 
       const response = await fetch(
-        '/api/founder/users'
+        '/api/founder/users',
+        {
+          cache: 'no-store',
+        },
       )
 
       const result = await response.json()
@@ -121,16 +177,17 @@ export default function FounderUsersPage() {
       if (!response.ok) {
         throw new Error(
           result.error ||
-            'Gagal mengambil data pengguna.'
+            'Gagal mengambil data pengguna.',
         )
       }
 
       setUsers(result.users ?? [])
     } catch (err) {
-      setError(
+      showToast(
+        'error',
         err instanceof Error
           ? err.message
-          : 'Gagal mengambil data pengguna.'
+          : 'Gagal mengambil data pengguna.',
       )
     } finally {
       setLoading(false)
@@ -140,6 +197,77 @@ export default function FounderUsersPage() {
   useEffect(() => {
     loadUsers()
   }, [])
+
+  /*
+   * ============================================================
+   * SEARCH
+   * ============================================================
+   */
+
+  function matchesSearch(user: User) {
+    const query =
+      searchQuery
+        .trim()
+        .toLowerCase()
+
+    if (!query) {
+      return true
+    }
+
+    return (
+      user.full_name
+        .toLowerCase()
+        .includes(query) ||
+      getRoleName(user.role_id)
+        .toLowerCase()
+        .includes(query) ||
+      user.phone_number
+        ?.toLowerCase()
+        .includes(query) ||
+      user.id
+        .toLowerCase()
+        .includes(query)
+    )
+  }
+
+  const filteredUsers = useMemo(
+    () =>
+      users.filter(matchesSearch),
+    [users, searchQuery],
+  )
+
+  const founders = useMemo(
+    () =>
+      getUsersByRole(
+        filteredUsers,
+        1,
+      ),
+    [filteredUsers],
+  )
+
+  const tutors = useMemo(
+    () =>
+      getUsersByRole(
+        filteredUsers,
+        2,
+      ),
+    [filteredUsers],
+  )
+
+  const parents = useMemo(
+    () =>
+      getUsersByRole(
+        filteredUsers,
+        3,
+      ),
+    [filteredUsers],
+  )
+
+  /*
+   * ============================================================
+   * MODAL
+   * ============================================================
+   */
 
   function openCreateModal() {
     setEditingUser(null)
@@ -152,24 +280,35 @@ export default function FounderUsersPage() {
       roleId: '3',
     })
 
-    setMessage('')
-    setError('')
+    setShowPassword(false)
     setModalOpen(true)
   }
 
   function openEditModal(user: User) {
+    /*
+     * Founder tidak boleh diedit.
+     * Guard tambahan di frontend.
+     */
+    if (user.role_id === 1) {
+      showToast(
+        'error',
+        'Akun Founder dilindungi dan tidak dapat diedit.',
+      )
+      return
+    }
+
     setEditingUser(user)
 
     setForm({
       email: '',
       password: '',
       fullName: user.full_name,
-      phoneNumber: user.phone_number ?? '',
+      phoneNumber:
+        user.phone_number ?? '',
       roleId: String(user.role_id),
     })
 
-    setMessage('')
-    setError('')
+    setShowPassword(false)
     setModalOpen(true)
   }
 
@@ -178,18 +317,22 @@ export default function FounderUsersPage() {
 
     setModalOpen(false)
     setEditingUser(null)
-    setError('')
+    setShowPassword(false)
   }
 
+  /*
+   * ============================================================
+   * CREATE / EDIT
+   * ============================================================
+   */
+
   async function handleSubmit(
-    event: FormEvent<HTMLFormElement>
+    event: FormEvent<HTMLFormElement>,
   ) {
     event.preventDefault()
 
     try {
       setSaving(true)
-      setError('')
-      setMessage('')
 
       const url = editingUser
         ? `/api/founder/users/${editingUser.id}`
@@ -202,7 +345,8 @@ export default function FounderUsersPage() {
       const body = editingUser
         ? {
             fullName: form.fullName,
-            phoneNumber: form.phoneNumber,
+            phoneNumber:
+              form.phoneNumber,
             roleId: form.roleId,
             password:
               form.password || undefined,
@@ -211,107 +355,516 @@ export default function FounderUsersPage() {
             email: form.email,
             password: form.password,
             fullName: form.fullName,
-            phoneNumber: form.phoneNumber,
+            phoneNumber:
+              form.phoneNumber,
             roleId: form.roleId,
           }
 
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await fetch(
+        url,
+        {
+          method,
+          headers: {
+            'Content-Type':
+              'application/json',
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      })
+      )
 
-      const result = await response.json()
+      const result =
+        await response.json()
 
       if (!response.ok) {
         throw new Error(
           result.error ||
-            'Gagal menyimpan pengguna.'
+            'Gagal menyimpan pengguna.',
         )
       }
 
-      setMessage(
-        editingUser
-          ? 'Data pengguna berhasil diperbarui.'
-          : 'Akun pengguna berhasil dibuat.'
-      )
-
       setModalOpen(false)
       setEditingUser(null)
+      setShowPassword(false)
+
+      showToast(
+        'success',
+        editingUser
+          ? 'Data pengguna berhasil diperbarui.'
+          : 'Akun pengguna berhasil dibuat.',
+      )
 
       await loadUsers()
     } catch (err) {
-      setError(
+      showToast(
+        'error',
         err instanceof Error
           ? err.message
-          : 'Gagal menyimpan pengguna.'
+          : 'Gagal menyimpan pengguna.',
       )
     } finally {
       setSaving(false)
     }
   }
 
+  /*
+   * ============================================================
+   * DELETE
+   * ============================================================
+   */
+
   async function handleDelete(user: User) {
-    const confirmed = window.confirm(
-      `Hapus akun ${user.full_name} secara permanen?\n\nTindakan ini tidak dapat dibatalkan.`
-    )
+    /*
+     * Founder tidak boleh dihapus.
+     */
+    if (user.role_id === 1) {
+      showToast(
+        'error',
+        'Akun Founder dilindungi dan tidak dapat dihapus.',
+      )
+      return
+    }
+
+    const confirmed =
+      window.confirm(
+        `Hapus akun ${user.full_name} secara permanen?\n\nTindakan ini tidak dapat dibatalkan.`,
+      )
 
     if (!confirmed) return
 
     try {
       setDeletingId(user.id)
-      setError('')
-      setMessage('')
 
-      const response = await fetch(
-        `/api/founder/users/${user.id}`,
-        {
-          method: 'DELETE',
-        }
-      )
+      const response =
+        await fetch(
+          `/api/founder/users/${user.id}`,
+          {
+            method: 'DELETE',
+          },
+        )
 
-      const result = await response.json()
+      const result =
+        await response.json()
 
       if (!response.ok) {
         throw new Error(
           result.error ||
-            'Gagal menghapus pengguna.'
+            'Gagal menghapus pengguna.',
         )
       }
 
-      setMessage(
-        'Akun pengguna berhasil dihapus secara permanen.'
+      showToast(
+        'success',
+        'Akun pengguna berhasil dihapus secara permanen.',
       )
 
       await loadUsers()
     } catch (err) {
-      setError(
+      showToast(
+        'error',
         err instanceof Error
           ? err.message
-          : 'Gagal menghapus pengguna.'
+          : 'Gagal menghapus pengguna.',
       )
     } finally {
       setDeletingId(null)
     }
   }
 
-  const totalFounder = users.filter(
-    (user) => user.role_id === 1
-  ).length
+  /*
+   * ============================================================
+   * SUMMARY
+   * ============================================================
+   */
 
-  const totalTutor = users.filter(
-    (user) => user.role_id === 2
-  ).length
+  const totalFounder =
+    users.filter(
+      (user) => user.role_id === 1,
+    ).length
 
-  const totalParent = users.filter(
-    (user) => user.role_id === 3
-  ).length
+  const totalTutor =
+    users.filter(
+      (user) => user.role_id === 2,
+    ).length
+
+  const totalParent =
+    users.filter(
+      (user) => user.role_id === 3,
+    ).length
+
+  /*
+   * ============================================================
+   * USER SECTION
+   * ============================================================
+   */
+
+  function UserSection({
+    title,
+    description,
+    users: sectionUsers,
+    icon,
+    iconClass,
+  }: {
+    title: string
+    description: string
+    users: User[]
+    icon: React.ReactNode
+    iconClass: string
+  }) {
+    return (
+      <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="border-b border-slate-200 px-5 py-5">
+          <div className="flex items-start gap-3">
+            <div
+              className={`shrink-0 rounded-xl p-2.5 ${iconClass}`}
+            >
+              {icon}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h2 className="font-semibold text-slate-900">
+                    {title}
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    {description}
+                  </p>
+                </div>
+
+                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-500">
+                  {sectionUsers.length}{' '}
+                  pengguna
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {sectionUsers.length === 0 ? (
+          <div className="px-6 py-12 text-center">
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
+              <Users
+                size={23}
+                className="text-slate-400"
+              />
+            </div>
+
+            <p className="text-sm font-medium text-slate-700">
+              {searchQuery
+                ? 'Tidak ada hasil pencarian.'
+                : `Belum ada ${title.toLowerCase()}.`}
+            </p>
+
+            <p className="mt-1 text-xs text-slate-400">
+              {searchQuery
+                ? 'Coba gunakan kata kunci lain.'
+                : 'Data pengguna akan muncul di bagian ini.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[780px]">
+              <thead className="bg-slate-50">
+                <tr className="border-b border-slate-200">
+                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Pengguna
+                  </th>
+
+                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Kontak
+                  </th>
+
+                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Peran
+                  </th>
+
+                  <th className="px-5 py-4 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Aksi
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {sectionUsers.map(
+                  (user) => {
+                    const isFounder =
+                      user.role_id === 1
+
+                    return (
+                      <tr
+                        key={user.id}
+                        className="border-b border-slate-100 last:border-0 hover:bg-slate-50/70"
+                      >
+                        {/* USER */}
+                        <td className="px-5 py-4">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className={`
+                                flex
+                                h-10
+                                w-10
+                                shrink-0
+                                items-center
+                                justify-center
+                                rounded-full
+                                font-semibold
+                                ${
+                                  isFounder
+                                    ? 'bg-red-50 text-red-600'
+                                    : 'bg-slate-100 text-slate-700'
+                                }
+                              `}
+                            >
+                              {getInitial(
+                                user.full_name,
+                              )}
+                            </div>
+
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="truncate font-medium text-slate-900">
+                                  {
+                                    user.full_name
+                                  }
+                                </p>
+
+                                {isFounder && (
+                                  <ShieldCheck
+                                    size={15}
+                                    className="shrink-0 text-red-500"
+                                  />
+                                )}
+                              </div>
+
+                              <p className="mt-0.5 text-xs text-slate-400">
+                                ID:{' '}
+                                {user.id.slice(
+                                  0,
+                                  8,
+                                )}
+                                ...
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+
+                        {/* KONTAK */}
+                        <td className="px-5 py-4">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2 text-sm text-slate-600">
+                              <Mail
+                                size={15}
+                                className="shrink-0 text-slate-400"
+                              />
+
+                              <span>
+                                Akun terdaftar
+                              </span>
+                            </div>
+
+                            {user.phone_number && (
+                              <div className="flex items-center gap-2 text-sm text-slate-500">
+                                <Phone
+                                  size={15}
+                                  className="shrink-0 text-slate-400"
+                                />
+
+                                <span>
+                                  {
+                                    user.phone_number
+                                  }
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* ROLE */}
+                        <td className="px-5 py-4">
+                          <span
+                            className={`
+                              inline-flex
+                              rounded-full
+                              border
+                              px-3
+                              py-1
+                              text-xs
+                              font-semibold
+                              ${getRoleStyle(
+                                user.role_id,
+                              )}
+                            `}
+                          >
+                            {getRoleName(
+                              user.role_id,
+                            )}
+                          </span>
+                        </td>
+
+                        {/* ACTION */}
+                        <td className="px-5 py-4">
+                          {isFounder ? (
+                            <div className="flex justify-end">
+                              <span className="inline-flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600">
+                                <LockKeyhole
+                                  size={14}
+                                />
+                                Terlindungi
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openEditModal(
+                                    user,
+                                  )
+                                }
+                                className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                              >
+                                <Edit3
+                                  size={16}
+                                />
+                                Edit
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={
+                                  deletingId ===
+                                  user.id
+                                }
+                                onClick={() =>
+                                  handleDelete(
+                                    user,
+                                  )
+                                }
+                                className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                {deletingId ===
+                                user.id ? (
+                                  <Loader2
+                                    size={16}
+                                    className="animate-spin"
+                                  />
+                                ) : (
+                                  <Trash2
+                                    size={16}
+                                  />
+                                )}
+
+                                Hapus
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  },
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    )
+  }
+
+  /*
+   * ============================================================
+   * RENDER
+   * ============================================================
+   */
 
   return (
     <div className="min-h-screen bg-[#F8FAFC]">
-      {/* HEADER */}
+      {/* ========================================================
+          TOAST
+      ======================================================== */}
+
+      {toast && (
+        <div className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm sm:right-6 sm:top-6">
+          <div
+            className={`
+              flex
+              items-start
+              gap-3
+              rounded-2xl
+              border
+              bg-white
+              px-4
+              py-4
+              shadow-xl
+              ${
+                toast.type ===
+                'success'
+                  ? 'border-emerald-200'
+                  : 'border-red-200'
+              }
+            `}
+          >
+            <div
+              className={`
+                flex
+                h-9
+                w-9
+                shrink-0
+                items-center
+                justify-center
+                rounded-full
+                ${
+                  toast.type ===
+                  'success'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : 'bg-red-50 text-red-600'
+                }
+              `}
+            >
+              {toast.type ===
+              'success' ? (
+                <CheckCircle2
+                  size={19}
+                />
+              ) : (
+                <AlertCircle
+                  size={19}
+                />
+              )}
+            </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-slate-900">
+                {toast.type ===
+                'success'
+                  ? 'Berhasil'
+                  : 'Gagal'}
+              </p>
+
+              <p className="mt-0.5 text-sm leading-5 text-slate-500">
+                {toast.message}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() =>
+                setToast(null)
+              }
+              className="shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              aria-label="Tutup notifikasi"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================
+          HEADER
+      ======================================================== */}
+
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="flex min-h-20 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <div>
@@ -327,23 +880,7 @@ export default function FounderUsersPage() {
           <button
             type="button"
             onClick={openCreateModal}
-            className="
-              inline-flex
-              items-center
-              gap-2
-              rounded-xl
-              bg-gradient-to-r
-              from-[#E53935]
-              to-[#FF5722]
-              px-4
-              py-2.5
-              text-sm
-              font-semibold
-              text-white
-              shadow-sm
-              transition
-              hover:shadow-md
-            "
+            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#E53935] to-[#FF5722] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:shadow-md"
           >
             <Plus size={18} />
 
@@ -358,14 +895,19 @@ export default function FounderUsersPage() {
         </div>
       </header>
 
-      {/* KONTEN */}
+      {/* ========================================================
+          MAIN
+      ======================================================== */}
+
       <main className="p-4 sm:p-6 lg:p-8">
         <div className="mx-auto max-w-7xl">
-          {/* INFORMASI */}
+          {/* INFO */}
           <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-start gap-4">
               <div className="shrink-0 rounded-xl bg-red-50 p-3 text-red-600">
-                <LockKeyhole size={22} />
+                <LockKeyhole
+                  size={22}
+                />
               </div>
 
               <div className="min-w-0">
@@ -374,36 +916,18 @@ export default function FounderUsersPage() {
                 </h2>
 
                 <p className="mt-1 text-sm leading-6 text-slate-500">
-                  Hanya Founder yang dapat membuat,
-                  mengubah, dan menghapus akun
-                  pengguna. Tutor dan Orang Tua tidak
-                  memiliki akses untuk mengelola akun
-                  pengguna melalui sistem.
+                  Founder memiliki kendali
+                  pengelolaan akun Tutor dan
+                  Orang Tua. Akun Founder
+                  dilindungi dan tidak dapat
+                  diedit atau dihapus melalui
+                  sistem.
                 </p>
               </div>
             </div>
           </div>
 
-          {/* PESAN BERHASIL */}
-          {message && (
-            <div className="mb-6 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-              <ShieldCheck
-                size={18}
-                className="mt-0.5 shrink-0"
-              />
-
-              <span>{message}</span>
-            </div>
-          )}
-
-          {/* PESAN ERROR */}
-          {error && !modalOpen && (
-            <div className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
-            </div>
-          )}
-
-          {/* RINGKASAN */}
+          {/* SUMMARY */}
           <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {/* TOTAL */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -434,7 +958,9 @@ export default function FounderUsersPage() {
                 </span>
 
                 <div className="rounded-xl bg-red-50 p-2 text-red-500">
-                  <ShieldCheck size={18} />
+                  <ShieldCheck
+                    size={18}
+                  />
                 </div>
               </div>
 
@@ -443,7 +969,7 @@ export default function FounderUsersPage() {
               </p>
 
               <p className="mt-1 text-xs text-slate-400">
-                Pengelola sistem
+                Akun terlindungi
               </p>
             </div>
 
@@ -468,7 +994,7 @@ export default function FounderUsersPage() {
               </p>
             </div>
 
-            {/* ORANG TUA */}
+            {/* PARENT */}
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-500">
@@ -490,303 +1016,120 @@ export default function FounderUsersPage() {
             </div>
           </div>
 
-          {/* DAFTAR PENGGUNA */}
-          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-5">
-              <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-                <div>
-                  <h2 className="font-semibold text-slate-900">
-                    Daftar Pengguna
-                  </h2>
+          {/* SEARCH */}
+          <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="relative">
+              <Search
+                size={19}
+                className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+              />
 
-                  <p className="mt-1 text-sm text-slate-500">
-                    Kelola seluruh akun yang terdaftar
-                    di NAGALA Education.
-                  </p>
-                </div>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) =>
+                  setSearchQuery(
+                    event.target.value,
+                  )
+                }
+                placeholder="Cari nama, peran, nomor telepon, atau ID pengguna..."
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-11 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-red-400 focus:bg-white focus:ring-2 focus:ring-red-100"
+              />
 
-                <span className="text-xs font-medium text-slate-400">
-                  {users.length} pengguna
-                </span>
-              </div>
-            </div>
-
-            {/* LOADING */}
-            {loading ? (
-              <div className="flex min-h-64 items-center justify-center">
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2
-                    size={28}
-                    className="animate-spin text-slate-400"
-                  />
-
-                  <p className="text-sm text-slate-500">
-                    Memuat data pengguna...
-                  </p>
-                </div>
-              </div>
-            ) : users.length === 0 ? (
-              /* KOSONG */
-              <div className="flex min-h-64 flex-col items-center justify-center px-6 text-center">
-                <div className="mb-4 rounded-2xl bg-slate-100 p-4">
-                  <Users
-                    size={36}
-                    className="text-slate-400"
-                  />
-                </div>
-
-                <h3 className="font-semibold text-slate-800">
-                  Belum ada pengguna
-                </h3>
-
-                <p className="mt-1 max-w-sm text-sm text-slate-500">
-                  Tambahkan akun pengguna untuk mulai
-                  mengelola akses NAGALA Education.
-                </p>
-
+              {searchQuery && (
                 <button
                   type="button"
-                  onClick={openCreateModal}
-                  className="
-                    mt-5
-                    inline-flex
-                    items-center
-                    gap-2
-                    rounded-xl
-                    bg-slate-900
-                    px-4
-                    py-2.5
-                    text-sm
-                    font-semibold
-                    text-white
-                    transition
-                    hover:bg-slate-800
-                  "
+                  onClick={() =>
+                    setSearchQuery('')
+                  }
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700"
+                  aria-label="Hapus pencarian"
                 >
-                  <Plus size={17} />
-                  Tambah Pengguna
+                  <X size={16} />
                 </button>
-              </div>
-            ) : (
-              /* TABEL */
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[780px]">
-                  <thead className="bg-slate-50">
-                    <tr className="border-b border-slate-200">
-                      <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Pengguna
-                      </th>
+              )}
+            </div>
 
-                      <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Kontak
-                      </th>
-
-                      <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Peran
-                      </th>
-
-                      <th className="px-5 py-4 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Aksi
-                      </th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {users.map((user) => (
-                      <tr
-                        key={user.id}
-                        className="
-                          border-b
-                          border-slate-100
-                          last:border-0
-                          hover:bg-slate-50/70
-                        "
-                      >
-                        {/* PENGGUNA */}
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="
-                              flex
-                              h-10
-                              w-10
-                              shrink-0
-                              items-center
-                              justify-center
-                              rounded-full
-                              bg-slate-100
-                              font-semibold
-                              text-slate-700
-                            ">
-                              {getInitial(
-                                user.full_name
-                              )}
-                            </div>
-
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-slate-900">
-                                {user.full_name}
-                              </p>
-
-                              <p className="mt-0.5 text-xs text-slate-400">
-                                ID:{' '}
-                                {user.id.slice(0, 8)}
-                                ...
-                              </p>
-                            </div>
-                          </div>
-                        </td>
-
-                        {/* KONTAK */}
-                        <td className="px-5 py-4">
-                          <div className="space-y-1.5">
-                            <div className="flex items-center gap-2 text-sm text-slate-600">
-                              <Mail
-                                size={15}
-                                className="shrink-0 text-slate-400"
-                              />
-
-                              <span>
-                                Akun terdaftar
-                              </span>
-                            </div>
-
-                            {user.phone_number && (
-                              <div className="flex items-center gap-2 text-sm text-slate-500">
-                                <Phone
-                                  size={15}
-                                  className="shrink-0 text-slate-400"
-                                />
-
-                                <span>
-                                  {user.phone_number}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-
-                        {/* PERAN */}
-                        <td className="px-5 py-4">
-                          <span
-                            className={`
-                              inline-flex
-                              rounded-full
-                              border
-                              px-3
-                              py-1
-                              text-xs
-                              font-semibold
-                              ${getRoleStyle(
-                                user.role_id
-                              )}
-                            `}
-                          >
-                            {getRoleName(
-                              user.role_id
-                            )}
-                          </span>
-                        </td>
-
-                        {/* AKSI */}
-                        <td className="px-5 py-4">
-                          <div className="flex justify-end gap-2">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openEditModal(
-                                  user
-                                )
-                              }
-                              className="
-                                inline-flex
-                                items-center
-                                gap-2
-                                rounded-lg
-                                border
-                                border-slate-200
-                                px-3
-                                py-2
-                                text-sm
-                                font-medium
-                                text-slate-700
-                                transition
-                                hover:bg-slate-100
-                              "
-                            >
-                              <Edit3 size={16} />
-                              Edit
-                            </button>
-
-                            <button
-                              type="button"
-                              disabled={
-                                deletingId ===
-                                user.id
-                              }
-                              onClick={() =>
-                                handleDelete(
-                                  user
-                                )
-                              }
-                              className="
-                                inline-flex
-                                items-center
-                                gap-2
-                                rounded-lg
-                                border
-                                border-red-200
-                                px-3
-                                py-2
-                                text-sm
-                                font-medium
-                                text-red-600
-                                transition
-                                hover:bg-red-50
-                                disabled:cursor-not-allowed
-                                disabled:opacity-50
-                              "
-                            >
-                              {deletingId ===
-                              user.id ? (
-                                <Loader2
-                                  size={16}
-                                  className="animate-spin"
-                                />
-                              ) : (
-                                <Trash2
-                                  size={16}
-                                />
-                              )}
-
-                              Hapus
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {searchQuery && (
+              <p className="mt-2 px-1 text-xs text-slate-400">
+                Menampilkan{' '}
+                <span className="font-semibold text-slate-600">
+                  {filteredUsers.length}
+                </span>{' '}
+                dari{' '}
+                <span className="font-semibold text-slate-600">
+                  {users.length}
+                </span>{' '}
+                pengguna
+              </p>
             )}
-          </section>
+          </div>
+
+          {/* LOADING */}
+          {loading ? (
+            <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2
+                  size={28}
+                  className="animate-spin text-slate-400"
+                />
+
+                <p className="text-sm text-slate-500">
+                  Memuat data pengguna...
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* FOUNDER */}
+              <UserSection
+                title="Founder"
+                description="Akun dengan akses pengelolaan sistem."
+                users={founders}
+                icon={
+                  <ShieldCheck
+                    size={20}
+                  />
+                }
+                iconClass="bg-red-50 text-red-600"
+              />
+
+              {/* TUTOR */}
+              <UserSection
+                title="Tutor"
+                description="Akun pengajar yang mengelola kegiatan akademik."
+                users={tutors}
+                icon={
+                  <UserPlus
+                    size={20}
+                  />
+                }
+                iconClass="bg-blue-50 text-blue-600"
+              />
+
+              {/* PARENT */}
+              <UserSection
+                title="Orang Tua"
+                description="Akun orang tua untuk memantau perkembangan anak."
+                users={parents}
+                icon={
+                  <Users size={20} />
+                }
+                iconClass="bg-emerald-50 text-emerald-600"
+              />
+            </div>
+          )}
         </div>
       </main>
 
-      {/* MODAL */}
+      {/* ========================================================
+          MODAL
+      ======================================================== */}
+
       {modalOpen && (
-        <div className="
-          fixed
-          inset-0
-          z-[60]
-          flex
-          items-center
-          justify-center
-          overflow-y-auto
-          bg-slate-900/60
-          p-4
-        ">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-4">
           <div className="my-8 w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
-            {/* HEADER MODAL */}
+            {/* HEADER */}
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div className="min-w-0">
                 <h2 className="font-semibold text-slate-900">
@@ -796,7 +1139,8 @@ export default function FounderUsersPage() {
                 </h2>
 
                 <p className="mt-1 text-xs text-slate-500">
-                  Data akun dikelola oleh Founder.
+                  Data akun dikelola oleh
+                  Founder.
                 </p>
               </div>
 
@@ -804,16 +1148,7 @@ export default function FounderUsersPage() {
                 type="button"
                 onClick={closeModal}
                 disabled={saving}
-                className="
-                  shrink-0
-                  rounded-lg
-                  p-2
-                  text-slate-400
-                  transition
-                  hover:bg-slate-100
-                  hover:text-slate-700
-                  disabled:opacity-50
-                "
+                className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
                 aria-label="Tutup formulir"
               >
                 <X size={20} />
@@ -835,29 +1170,16 @@ export default function FounderUsersPage() {
                   <input
                     type="email"
                     required
+                    pattern="[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
                     value={form.email}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        email:
-                          event.target.value,
+                        email: event.target.value,
                       }))
                     }
                     placeholder="contoh@nagala.edu"
-                    className="
-                      w-full
-                      rounded-xl
-                      border
-                      border-slate-200
-                      px-4
-                      py-3
-                      text-sm
-                      outline-none
-                      transition
-                      focus:border-red-400
-                      focus:ring-2
-                      focus:ring-red-100
-                    "
+                    className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
                   />
                 </div>
               )}
@@ -871,33 +1193,25 @@ export default function FounderUsersPage() {
                 <input
                   type="text"
                   required
+                  minLength={2}
+                  maxLength={100}
                   value={form.fullName}
                   onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      fullName:
-                        event.target.value,
-                    }))
+                    setForm(
+                      (current) => ({
+                        ...current,
+                        fullName:
+                          event.target
+                            .value,
+                      }),
+                    )
                   }
                   placeholder="Nama lengkap pengguna"
-                  className="
-                    w-full
-                    rounded-xl
-                    border
-                    border-slate-200
-                    px-4
-                    py-3
-                    text-sm
-                    outline-none
-                    transition
-                    focus:border-red-400
-                    focus:ring-2
-                    focus:ring-red-100
-                  "
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
                 />
               </div>
 
-              {/* NOMOR TELEPON */}
+              {/* TELEPON */}
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-700">
                   Nomor Telepon
@@ -905,33 +1219,28 @@ export default function FounderUsersPage() {
 
                 <input
                   type="tel"
+                  required
+                  inputMode="numeric"
+                  pattern="[0-9]{10,13}"
+                  minLength={10}
+                  maxLength={13}
                   value={form.phoneNumber}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      phoneNumber:
-                        event.target.value,
-                    }))
-                  }
+                  onChange={(event) => {
+                    const value = event.target.value.replace(/\D/g, '')
+
+                    if (value.length <= 13) {
+                      setForm((current) => ({
+                        ...current,
+                        phoneNumber: value,
+                      }))
+                    }
+                  }}
                   placeholder="08xxxxxxxxxx"
-                  className="
-                    w-full
-                    rounded-xl
-                    border
-                    border-slate-200
-                    px-4
-                    py-3
-                    text-sm
-                    outline-none
-                    transition
-                    focus:border-red-400
-                    focus:ring-2
-                    focus:ring-red-100
-                  "
+                  className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
                 />
               </div>
 
-              {/* PERAN */}
+              {/* ROLE */}
               <div>
                 <label className="mb-2 block text-sm font-medium text-slate-700">
                   Peran Pengguna
@@ -940,37 +1249,44 @@ export default function FounderUsersPage() {
                 <select
                   value={form.roleId}
                   onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      roleId:
-                        event.target.value,
-                    }))
+                    setForm(
+                      (current) => ({
+                        ...current,
+                        roleId:
+                          event.target
+                            .value,
+                      }),
+                    )
                   }
-                  className="
-                    w-full
-                    rounded-xl
-                    border
-                    border-slate-200
-                    bg-white
-                    px-4
-                    py-3
-                    text-sm
-                    outline-none
-                    transition
-                    focus:border-red-400
-                    focus:ring-2
-                    focus:ring-red-100
-                  "
+                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
                 >
-                  {roles.map((role) => (
-                    <option
-                      key={role.id}
-                      value={role.id}
-                    >
-                      {role.role_name}
-                    </option>
-                  ))}
+                  {roles
+                    .filter(
+                      (role) =>
+                        role.id !== 1,
+                    )
+                    .map(
+                      (role) => (
+                        <option
+                          key={
+                            role.id
+                          }
+                          value={
+                            role.id
+                          }
+                        >
+                          {
+                            role.role_name
+                          }
+                        </option>
+                      ),
+                    )}
                 </select>
+
+                <p className="mt-1.5 text-xs text-slate-400">
+                  Akun Founder tidak dapat
+                  dibuat melalui formulir ini.
+                </p>
               </div>
 
               {/* PASSWORD */}
@@ -981,38 +1297,67 @@ export default function FounderUsersPage() {
                     : 'Password'}
                 </label>
 
-                <input
-                  type="password"
-                  required={!editingUser}
-                  minLength={6}
-                  value={form.password}
-                  onChange={(event) =>
-                    setForm((current) => ({
-                      ...current,
-                      password:
-                        event.target.value,
-                    }))
-                  }
-                  placeholder={
-                    editingUser
-                      ? 'Kosongkan jika tidak diubah'
-                      : 'Minimal 6 karakter'
-                  }
-                  className="
-                    w-full
-                    rounded-xl
-                    border
-                    border-slate-200
-                    px-4
-                    py-3
-                    text-sm
-                    outline-none
-                    transition
-                    focus:border-red-400
-                    focus:ring-2
-                    focus:ring-red-100
-                  "
-                />
+                <div className="relative">
+                  <input
+                    type={
+                      showPassword
+                        ? 'text'
+                        : 'password'
+                    }
+                    required={
+                      !editingUser
+                    }
+                    minLength={6}
+                    value={
+                      form.password
+                    }
+                    onChange={(
+                      event,
+                    ) =>
+                      setForm(
+                        (current) => ({
+                          ...current,
+                          password:
+                            event
+                              .target
+                              .value,
+                        }),
+                      )
+                    }
+                    placeholder={
+                      editingUser
+                        ? 'Kosongkan jika tidak diubah'
+                        : 'Minimal 6 karakter'
+                    }
+                    className="w-full rounded-xl border border-slate-200 py-3 pl-4 pr-12 text-sm outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                  />
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setShowPassword(
+                        (current) =>
+                          !current,
+                      )
+                    }
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                    aria-label={
+                      showPassword
+                        ? 'Sembunyikan password'
+                        : 'Tampilkan password'
+                    }
+                  >
+                    {showPassword ? (
+                      <EyeOff
+                        size={19}
+                      />
+                    ) : (
+                      <Eye
+                        size={19}
+                      />
+                    )}
+                  </button>
+                </div>
 
                 <p className="mt-1.5 text-xs text-slate-400">
                   {editingUser
@@ -1021,32 +1366,15 @@ export default function FounderUsersPage() {
                 </p>
               </div>
 
-              {/* ERROR MODAL */}
-              {error && (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-5 text-red-700">
-                  {error}
-                </div>
-              )}
-
-              {/* TOMBOL */}
+              {/* ACTION */}
               <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:justify-end">
                 <button
                   type="button"
-                  onClick={closeModal}
+                  onClick={
+                    closeModal
+                  }
                   disabled={saving}
-                  className="
-                    rounded-xl
-                    border
-                    border-slate-200
-                    px-5
-                    py-3
-                    text-sm
-                    font-medium
-                    text-slate-700
-                    transition
-                    hover:bg-slate-50
-                    disabled:opacity-50
-                  "
+                  className="rounded-xl border border-slate-200 px-5 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
                 >
                   Batal
                 </button>
@@ -1054,26 +1382,7 @@ export default function FounderUsersPage() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="
-                    inline-flex
-                    items-center
-                    justify-center
-                    gap-2
-                    rounded-xl
-                    bg-gradient-to-r
-                    from-[#E53935]
-                    to-[#FF5722]
-                    px-5
-                    py-3
-                    text-sm
-                    font-semibold
-                    text-white
-                    shadow-sm
-                    transition
-                    hover:shadow-md
-                    disabled:cursor-not-allowed
-                    disabled:opacity-60
-                  "
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#E53935] to-[#FF5722] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {saving && (
                     <Loader2

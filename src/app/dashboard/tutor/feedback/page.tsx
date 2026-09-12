@@ -5,12 +5,15 @@ import Link from "next/link"
 import {
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react"
 
 import {
+  AlertCircle,
   BookOpen,
   ChevronRight,
+  CheckCircle2,
   ClipboardCheck,
   FileText,
   GraduationCap,
@@ -68,6 +71,65 @@ type ModulesData = {
   feedback: FeedbackItem[]
 }
 
+type ToastType = "success" | "error" | "info"
+
+type Toast = {
+  type: ToastType
+  message: string
+}
+
+function ToastView({
+  toast,
+}: {
+  toast: Toast
+}) {
+  const isSuccess = toast.type === "success"
+  const isError = toast.type === "error"
+
+  return (
+    <div
+      className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm"
+      aria-live="polite"
+    >
+      <div
+        className={`rounded-2xl border bg-white p-4 shadow-xl ${
+          isSuccess
+            ? "border-emerald-200"
+            : isError
+              ? "border-red-200"
+              : "border-blue-200"
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 shrink-0">
+            {isSuccess ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            ) : isError ? (
+              <XCircle className="h-5 w-5 text-red-600" />
+            ) : (
+              <AlertCircle className="h-5 w-5 text-blue-600" />
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-900">
+              {isSuccess
+                ? "Berhasil"
+                : isError
+                  ? "Gagal"
+                  : "Informasi"}
+            </p>
+
+            <p className="mt-1 text-sm leading-5 text-gray-600">
+              {toast.message}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TutorFeedbackPage() {
   const [data, setData] =
     useState<ModulesData | null>(null)
@@ -86,6 +148,40 @@ export default function TutorFeedbackPage() {
 
   const [selectedClass, setSelectedClass] =
     useState("ALL")
+
+  const [toast, setToast] =
+    useState<Toast | null>(null)
+
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+
+  function showToast(
+    type: ToastType,
+    message: string
+  ) {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current)
+    }
+
+    setToast({
+      type,
+      message,
+    })
+
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimeoutRef.current = null
+    }, 3500)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current)
+      }
+    }
+  }, [])
 
   async function loadFeedback(
     showRefresh = false
@@ -118,12 +214,24 @@ export default function TutorFeedbackPage() {
       }
 
       setData(result)
+
+      if (showRefresh) {
+        showToast(
+          "success",
+          "Data feedback berhasil diperbarui."
+        )
+      }
     } catch (err) {
-      setError(
+      const message =
         err instanceof Error
           ? err.message
           : "Terjadi kesalahan saat memuat feedback."
-      )
+
+      setError(message)
+
+      if (showRefresh) {
+        showToast("error", message)
+      }
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -224,6 +332,7 @@ export default function TutorFeedbackPage() {
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="h-8 w-8 animate-spin text-[#E53935]" />
+
           <p className="text-sm text-slate-500">
             Memuat feedback...
           </p>
@@ -270,8 +379,11 @@ export default function TutorFeedbackPage() {
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl space-y-6">
+      {toast && (
+        <ToastView toast={toast} />
+      )}
 
+      <div className="mx-auto max-w-7xl space-y-6">
         {/* HEADER */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -311,7 +423,7 @@ export default function TutorFeedbackPage() {
 
               {refreshing
                 ? "Memuat..."
-                : "Refresh"}
+                : "Perbarui Data"}
             </button>
 
             <Link

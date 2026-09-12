@@ -1,23 +1,24 @@
 'use client'
 
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
-import {
+  AlertCircle,
   BookOpen,
   CalendarDays,
+  CheckCircle2,
   Clock3,
   Edit3,
   GraduationCap,
+  Loader2,
   Plus,
   Search,
   Trash2,
   UserRound,
+  Users,
   X,
 } from 'lucide-react'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+
+type ClassStatus = 'ACTIVE' | 'INACTIVE'
 
 type Tutor = {
   id: string
@@ -27,20 +28,24 @@ type Tutor = {
 
 type ClassItem = {
   id: string
-  tutor_id: string
   class_name: string
   subject: string
   description: string | null
+  tutor_id: string
   schedule_day: string
   schedule_start: string
   schedule_end: string
-  status: 'ACTIVE' | 'INACTIVE'
-  tutor:
-    | {
-        full_name: string
-        phone_number: string | null
-      }
-    | null
+  status: ClassStatus
+  tutors?: {
+    full_name: string
+  } | null
+}
+
+type ToastType = 'success' | 'error'
+
+type Toast = {
+  type: ToastType
+  message: string
 }
 
 type FormData = {
@@ -51,18 +56,7 @@ type FormData = {
   scheduleDay: string
   scheduleStart: string
   scheduleEnd: string
-  status: 'ACTIVE' | 'INACTIVE'
-}
-
-const EMPTY_FORM: FormData = {
-  className: '',
-  subject: '',
-  description: '',
-  tutorId: '',
-  scheduleDay: 'SENIN',
-  scheduleStart: '13:00',
-  scheduleEnd: '14:30',
-  status: 'ACTIVE',
+  status: ClassStatus
 }
 
 const DAY_LABELS: Record<string, string> = {
@@ -75,140 +69,180 @@ const DAY_LABELS: Record<string, string> = {
   MINGGU: 'Minggu',
 }
 
-function formatTime(value: string) {
-  if (!value) return '-'
-  return value.slice(0, 5)
+const DAYS = Object.keys(DAY_LABELS)
+
+const EMPTY_FORM: FormData = {
+  className: '',
+  subject: '',
+  description: '',
+  tutorId: '',
+  scheduleDay: 'SENIN',
+  scheduleStart: '13:00',
+  scheduleEnd: '14:30',
+  status: 'ACTIVE',
 }
 
-function formatDay(value: string) {
-  return DAY_LABELS[value] ?? value
+function hasControlChars(value: string) {
+  return /[\u0000-\u001F\u007F]/.test(value)
 }
 
-export default function FounderClassesPage() {
+function isValidTime(value: string) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value)
+}
+
+function timeToMinutes(value: string) {
+  const [hours, minutes] = value.split(':').map(Number)
+  return hours * 60 + minutes
+}
+
+export default function ClassesPage() {
   const [classes, setClasses] = useState<ClassItem[]>([])
   const [tutors, setTutors] = useState<Tutor[]>([])
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
-  const [search, setSearch] = useState('')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false)
+
+  const [editingClass, setEditingClass] = useState<ClassItem | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<ClassItem | null>(null)
+
+  const [form, setForm] = useState<FormData>(EMPTY_FORM)
+
+  const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<
     'ALL' | 'ACTIVE' | 'INACTIVE'
   >('ALL')
 
-  const [modalOpen, setModalOpen] = useState(false)
-  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [toast, setToast] = useState<Toast | null>(null)
 
-  const [editingClass, setEditingClass] =
-    useState<ClassItem | null>(null)
+  function showToast(type: ToastType, message: string) {
+    setToast({ type, message })
 
-  const [deletingClass, setDeletingClass] =
-    useState<ClassItem | null>(null)
+    window.setTimeout(() => {
+      setToast(null)
+    }, 3500)
+  }
 
-  const [form, setForm] =
-    useState<FormData>(EMPTY_FORM)
-
-  const [error, setError] = useState('')
-
-  // ==========================================
-  // LOAD DATA
-  // ==========================================
-  const loadData = useCallback(async () => {
+  async function loadData() {
     try {
       setLoading(true)
-      setError('')
 
-      const [classesResponse, tutorsResponse] =
-        await Promise.all([
-          fetch('/api/founder/classes', {
-            cache: 'no-store',
-          }),
-          fetch('/api/founder/classes?tutors=true', {
-            cache: 'no-store',
-          }),
-        ])
+      const [classesResponse, tutorsResponse] = await Promise.all([
+        fetch('/api/founder/classes', {
+          method: 'GET',
+          cache: 'no-store',
+        }),
+        fetch('/api/founder/classes?tutors=true', {
+          method: 'GET',
+          cache: 'no-store',
+        }),
+      ])
 
-      const classesData =
-        await classesResponse.json()
-
-      const tutorsData =
-        await tutorsResponse.json()
+      const classesData = await classesResponse.json()
+      const tutorsData = await tutorsResponse.json()
 
       if (!classesResponse.ok) {
         throw new Error(
-          classesData.error ||
-            'Gagal mengambil data kelas.'
+          classesData?.error || 'Gagal mengambil data kelas.'
         )
       }
 
       if (!tutorsResponse.ok) {
         throw new Error(
-          tutorsData.error ||
-            'Gagal mengambil data tutor.'
+          tutorsData?.error || 'Gagal mengambil data tutor.'
         )
       }
 
-      setClasses(classesData.classes ?? [])
-      setTutors(tutorsData.tutors ?? [])
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Gagal memuat data.'
+      const classRows = Array.isArray(classesData)
+        ? classesData
+        : Array.isArray(classesData?.classes)
+          ? classesData.classes
+          : []
+
+      const tutorRows = Array.isArray(tutorsData)
+        ? tutorsData
+        : Array.isArray(tutorsData?.tutors)
+          ? tutorsData.tutors
+          : []
+
+      setClasses(classRows)
+      setTutors(tutorRows)
+    } catch (error) {
+      console.error(error)
+
+      showToast(
+        'error',
+        error instanceof Error
+          ? error.message
+          : 'Gagal memuat data kelas.'
       )
     } finally {
       setLoading(false)
     }
-  }, [])
+  }
 
   useEffect(() => {
     loadData()
-  }, [loadData])
+  }, [])
 
-  // ==========================================
-  // FILTER
-  // ==========================================
+  function getTutorName(item: ClassItem) {
+    return (
+      item.tutors?.full_name ??
+      tutors.find((tutor) => tutor.id === item.tutor_id)?.full_name ??
+      'Tutor tidak ditemukan'
+    )
+  }
+
   const filteredClasses = useMemo(() => {
-    const keyword = search
-      .trim()
-      .toLowerCase()
+    const query = searchQuery.trim().toLowerCase()
 
     return classes.filter((item) => {
-      const matchesSearch =
-        !keyword ||
-        item.class_name
-          .toLowerCase()
-          .includes(keyword) ||
-        item.subject
-          .toLowerCase()
-          .includes(keyword) ||
-        item.tutor?.full_name
-          ?.toLowerCase()
-          .includes(keyword)
-
       const matchesStatus =
-        statusFilter === 'ALL' ||
-        item.status === statusFilter
+        statusFilter === 'ALL' || item.status === statusFilter
 
-      return matchesSearch && matchesStatus
+      if (!matchesStatus) return false
+
+      if (!query) return true
+
+      const tutorName = getTutorName(item).toLowerCase()
+
+      return [
+        item.class_name,
+        item.subject,
+        item.schedule_day,
+        item.schedule_start,
+        item.schedule_end,
+        item.status,
+        item.id,
+        tutorName,
+      ].some((value) =>
+        String(value).toLowerCase().includes(query)
+      )
     })
-  }, [classes, search, statusFilter])
+  }, [classes, searchQuery, statusFilter, tutors])
 
-  const activeCount = classes.filter(
+  const totalClasses = classes.length
+
+  const activeClasses = classes.filter(
     (item) => item.status === 'ACTIVE'
   ).length
 
-  const inactiveCount = classes.filter(
+  const inactiveClasses = classes.filter(
     (item) => item.status === 'INACTIVE'
   ).length
 
-  // ==========================================
-  // MODAL
-  // ==========================================
+  const involvedTutorIds = new Set(
+    classes.map((item) => item.tutor_id)
+  )
+
+  const involvedTutors = involvedTutorIds.size
+
   function openCreateModal() {
     setEditingClass(null)
     setForm(EMPTY_FORM)
-    setError('')
     setModalOpen(true)
   }
 
@@ -221,16 +255,11 @@ export default function FounderClassesPage() {
       description: item.description ?? '',
       tutorId: item.tutor_id,
       scheduleDay: item.schedule_day,
-      scheduleStart: formatTime(
-        item.schedule_start
-      ),
-      scheduleEnd: formatTime(
-        item.schedule_end
-      ),
+      scheduleStart: item.schedule_start,
+      scheduleEnd: item.schedule_end,
       status: item.status,
     })
 
-    setError('')
     setModalOpen(true)
   }
 
@@ -240,85 +269,227 @@ export default function FounderClassesPage() {
     setModalOpen(false)
     setEditingClass(null)
     setForm(EMPTY_FORM)
-    setError('')
   }
 
-  // ==========================================
-  // SAVE
-  // ==========================================
-  async function handleSubmit(
-    event: React.FormEvent
-  ) {
+  function validateForm() {
+    const className = form.className.trim()
+    const subject = form.subject.trim()
+    const description = form.description.trim()
+
+    if (!className) {
+      showToast('error', 'Nama kelas wajib diisi.')
+      return false
+    }
+
+    if (className.length < 2 || className.length > 100) {
+      showToast(
+        'error',
+        'Nama kelas harus terdiri dari 2–100 karakter.'
+      )
+      return false
+    }
+
+    if (hasControlChars(className)) {
+      showToast('error', 'Nama kelas mengandung karakter yang tidak valid.')
+      return false
+    }
+
+    if (!subject) {
+      showToast('error', 'Mata pelajaran wajib diisi.')
+      return false
+    }
+
+    if (subject.length < 2 || subject.length > 100) {
+      showToast(
+        'error',
+        'Mata pelajaran harus terdiri dari 2–100 karakter.'
+      )
+      return false
+    }
+
+    if (hasControlChars(subject)) {
+      showToast(
+        'error',
+        'Mata pelajaran mengandung karakter yang tidak valid.'
+      )
+      return false
+    }
+
+    if (description.length > 500) {
+      showToast(
+        'error',
+        'Deskripsi maksimal 500 karakter.'
+      )
+      return false
+    }
+
+    if (hasControlChars(description)) {
+      showToast(
+        'error',
+        'Deskripsi mengandung karakter yang tidak valid.'
+      )
+      return false
+    }
+
+    if (!form.tutorId) {
+      showToast('error', 'Tutor wajib dipilih.')
+      return false
+    }
+
+    const tutorExists = tutors.some(
+      (tutor) => tutor.id === form.tutorId
+    )
+
+    if (!tutorExists) {
+      showToast(
+        'error',
+        'Tutor yang dipilih tidak valid.'
+      )
+      return false
+    }
+
+    if (!DAYS.includes(form.scheduleDay)) {
+      showToast(
+        'error',
+        'Hari jadwal tidak valid.'
+      )
+      return false
+    }
+
+    if (!isValidTime(form.scheduleStart)) {
+      showToast(
+        'error',
+        'Jam mulai tidak valid.'
+      )
+      return false
+    }
+
+    if (!isValidTime(form.scheduleEnd)) {
+      showToast(
+        'error',
+        'Jam selesai tidak valid.'
+      )
+      return false
+    }
+
+    if (
+      timeToMinutes(form.scheduleEnd) <=
+      timeToMinutes(form.scheduleStart)
+    ) {
+      showToast(
+        'error',
+        'Jam selesai harus lebih dari jam mulai.'
+      )
+      return false
+    }
+
+    if (
+      form.status !== 'ACTIVE' &&
+      form.status !== 'INACTIVE'
+    ) {
+      showToast(
+        'error',
+        'Status kelas tidak valid.'
+      )
+      return false
+    }
+
+    return true
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    setSaving(true)
-    setError('')
+    if (saving) return
+
+    if (!validateForm()) return
 
     try {
-      const endpoint = editingClass
-        ? `/api/founder/classes/${editingClass.id}`
-        : '/api/founder/classes'
+      setSaving(true)
 
-      const method = editingClass
-        ? 'PATCH'
-        : 'POST'
+      const payload = {
+        className: form.className.trim(),
+        subject: form.subject.trim(),
+        description: form.description.trim(),
+        tutorId: form.tutorId,
+        scheduleDay: form.scheduleDay,
+        scheduleStart: form.scheduleStart,
+        scheduleEnd: form.scheduleEnd,
+        status: form.status,
+      }
 
-      const response = await fetch(endpoint, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(form),
-      })
+      const isEditing = Boolean(editingClass)
+
+      const response = await fetch(
+        isEditing
+          ? `/api/founder/classes/${editingClass?.id}`
+          : '/api/founder/classes',
+        {
+          method: isEditing ? 'PATCH' : 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        }
+      )
 
       const data = await response.json()
 
       if (!response.ok) {
         throw new Error(
-          data.error ||
-            'Gagal menyimpan kelas.'
+          data?.error ||
+            (isEditing
+              ? 'Gagal memperbarui kelas.'
+              : 'Gagal menambahkan kelas.')
         )
       }
 
-      closeModal()
+      showToast(
+        'success',
+        isEditing
+          ? 'Kelas berhasil diperbarui.'
+          : 'Kelas berhasil ditambahkan.'
+      )
+
+      setModalOpen(false)
+      setEditingClass(null)
+      setForm(EMPTY_FORM)
+
       await loadData()
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Gagal menyimpan kelas.'
+    } catch (error) {
+      console.error(error)
+
+      showToast(
+        'error',
+        error instanceof Error
+          ? error.message
+          : 'Terjadi kesalahan saat menyimpan kelas.'
       )
     } finally {
       setSaving(false)
     }
   }
 
-  // ==========================================
-  // DELETE
-  // ==========================================
   function openDeleteModal(item: ClassItem) {
-    setDeletingClass(item)
-    setError('')
-    setDeleteOpen(true)
+    setDeleteTarget(item)
+    setDeleteModalOpen(true)
   }
 
   function closeDeleteModal() {
-    if (saving) return
+    if (deletingId) return
 
-    setDeleteOpen(false)
-    setDeletingClass(null)
-    setError('')
+    setDeleteModalOpen(false)
+    setDeleteTarget(null)
   }
 
   async function handleDelete() {
-    if (!deletingClass) return
-
-    setSaving(true)
-    setError('')
+    if (!deleteTarget || deletingId) return
 
     try {
+      setDeletingId(deleteTarget.id)
+
       const response = await fetch(
-        `/api/founder/classes/${deletingClass.id}`,
+        `/api/founder/classes/${deleteTarget.id}`,
         {
           method: 'DELETE',
         }
@@ -328,689 +499,924 @@ export default function FounderClassesPage() {
 
       if (!response.ok) {
         throw new Error(
-          data.error ||
-            'Gagal menghapus kelas.'
+          data?.error || 'Gagal menghapus kelas.'
         )
       }
 
-      closeDeleteModal()
+      showToast(
+        'success',
+        'Kelas berhasil dihapus.'
+      )
+
+      setDeleteModalOpen(false)
+      setDeleteTarget(null)
+
       await loadData()
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Gagal menghapus kelas.'
+    } catch (error) {
+      console.error(error)
+
+      showToast(
+        'error',
+        error instanceof Error
+          ? error.message
+          : 'Terjadi kesalahan saat menghapus kelas.'
       )
     } finally {
-      setSaving(false)
+      setDeletingId(null)
     }
   }
 
   return (
-    <div className="min-h-screen">
-      {/* ===================================== */}
-      {/* HEADER */}
-      {/* ===================================== */}
-      <section className="border-b border-slate-200 bg-white">
-        <div className="px-4 py-6 sm:px-6 lg:px-8">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <div className="mb-2 flex items-center gap-2 text-sm text-slate-500">
-                <GraduationCap size={17} />
-                <span>Operasional</span>
-                <span>/</span>
-                <span className="text-slate-900">
-                  Kelas
-                </span>
-              </div>
+    <div className="min-h-screen bg-[#F8FAFC]">
+      {/* TOAST */}
+      {toast && (
+        <div className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm sm:right-6 sm:top-6">
+          <div
+            className={`
+              flex
+              items-start
+              gap-3
+              rounded-2xl
+              border
+              bg-white
+              px-4
+              py-4
+              shadow-xl
+              ${
+                toast.type === 'success'
+                  ? 'border-emerald-200'
+                  : 'border-red-200'
+              }
+            `}
+          >
+            <div
+              className={`
+                flex
+                h-9
+                w-9
+                shrink-0
+                items-center
+                justify-center
+                rounded-full
+                ${
+                  toast.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : 'bg-red-50 text-red-600'
+                }
+              `}
+            >
+              {toast.type === 'success' ? (
+                <CheckCircle2 size={19} />
+              ) : (
+                <AlertCircle size={19} />
+              )}
+            </div>
 
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-                Kelas
-              </h1>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-slate-900">
+                {toast.type === 'success'
+                  ? 'Berhasil'
+                  : 'Gagal'}
+              </p>
 
-              <p className="mt-1 text-sm text-slate-500">
-                Kelola kelas, tutor, mata pelajaran,
-                dan jadwal pembelajaran.
+              <p className="mt-0.5 text-sm leading-5 text-slate-500">
+                {toast.message}
               </p>
             </div>
 
             <button
               type="button"
-              onClick={openCreateModal}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+              onClick={() => setToast(null)}
+              className="shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+              aria-label="Tutup notifikasi"
             >
-              <Plus size={18} />
-              Tambah Kelas
+              <X size={16} />
             </button>
           </div>
         </div>
-      </section>
+      )}
 
-      {/* ===================================== */}
-      {/* CONTENT */}
-      {/* ===================================== */}
-      <main className="px-4 py-6 sm:px-6 lg:px-8">
-        {/* SUMMARY */}
-        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-500">
-                  Total Kelas
-                </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {classes.length}
-                </p>
-              </div>
+      {/* HEADER */}
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="flex min-h-20 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+          <div>
+            <p className="text-sm font-medium text-slate-500">
+              Pengelolaan Sistem
+            </p>
 
-              <div className="rounded-xl bg-slate-100 p-3 text-slate-700">
-                <BookOpen size={21} />
-              </div>
-            </div>
+            <h1 className="mt-0.5 text-xl font-bold text-slate-900 sm:text-2xl">
+              Kelas
+            </h1>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-500">
-                  Kelas Aktif
-                </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {activeCount}
-                </p>
-              </div>
-
-              <div className="rounded-xl bg-emerald-50 p-3 text-emerald-600">
-                <BookOpen size={21} />
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-slate-500">
-                  Kelas Tidak Aktif
-                </p>
-                <p className="mt-2 text-2xl font-bold text-slate-900">
-                  {inactiveCount}
-                </p>
-              </div>
-
-              <div className="rounded-xl bg-slate-100 p-3 text-slate-500">
-                <BookOpen size={21} />
-              </div>
-            </div>
-          </div>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-gradient-to-r from-[#E53935] to-[#FF5722] px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md active:scale-[0.98]"
+          >
+            <Plus size={18} />
+            <span className="hidden sm:inline">
+              Tambah Kelas
+            </span>
+            <span className="sm:hidden">
+              Tambah
+            </span>
+          </button>
         </div>
+      </header>
 
-        {/* FILTER */}
-        <div className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row">
-            <div className="relative flex-1">
-              <Search
-                size={18}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-              />
+      {/* MAIN */}
+      <main className="p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-7xl">
+          {/* INFO */}
+          <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-start gap-4">
+              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                <GraduationCap size={22} />
+              </div>
 
-              <input
-                type="text"
-                value={search}
-                onChange={(event) =>
-                  setSearch(event.target.value)
-                }
-                placeholder="Cari nama kelas, mata pelajaran, atau tutor..."
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400 focus:bg-white"
-              />
+              <div>
+                <h2 className="font-semibold text-slate-900">
+                  Manajemen Kelas
+                </h2>
+
+                <p className="mt-1 text-sm leading-6 text-slate-500">
+                  Kelola kelas, mata pelajaran, tutor, jadwal,
+                  dan status pembelajaran Nagala Education dalam
+                  satu tempat.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* SUMMARY */}
+          <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">
+                    Total Kelas
+                  </p>
+
+                  <p className="mt-2 text-3xl font-bold text-slate-900">
+                    {totalClasses}
+                  </p>
+                </div>
+
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                  <BookOpen size={21} />
+                </div>
+              </div>
             </div>
 
-            <select
-              value={statusFilter}
-              onChange={(event) =>
-                setStatusFilter(
-                  event.target.value as
-                    | 'ALL'
-                    | 'ACTIVE'
-                    | 'INACTIVE'
-                )
-              }
-              className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-700 outline-none focus:border-slate-400"
-            >
-              <option value="ALL">
-                Semua Status
-              </option>
-              <option value="ACTIVE">
-                Aktif
-              </option>
-              <option value="INACTIVE">
-                Tidak Aktif
-              </option>
-            </select>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">
+                    Kelas Aktif
+                  </p>
+
+                  <p className="mt-2 text-3xl font-bold text-slate-900">
+                    {activeClasses}
+                  </p>
+                </div>
+
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                  <CheckCircle2 size={21} />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">
+                    Tidak Aktif
+                  </p>
+
+                  <p className="mt-2 text-3xl font-bold text-slate-900">
+                    {inactiveClasses}
+                  </p>
+                </div>
+
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-500">
+                  <BookOpen size={21} />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-slate-500">
+                    Tutor Terlibat
+                  </p>
+
+                  <p className="mt-2 text-3xl font-bold text-slate-900">
+                    {involvedTutors}
+                  </p>
+                </div>
+
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                  <Users size={21} />
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* ERROR */}
-        {error && !modalOpen && !deleteOpen && (
-          <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
-          </div>
-        )}
+          {/* SEARCH + FILTER */}
+          <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-col gap-3 lg:flex-row">
+              <div className="relative flex-1">
+                <Search
+                  size={19}
+                  className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
+                />
 
-        {/* TABLE */}
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[950px]">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50">
-                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Kelas
-                  </th>
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(event) =>
+                    setSearchQuery(event.target.value)
+                  }
+                  placeholder="Cari kelas, mata pelajaran, tutor..."
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-11 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-red-400 focus:bg-white focus:ring-2 focus:ring-red-100"
+                />
 
-                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Tutor
-                  </th>
-
-                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Jadwal
-                  </th>
-
-                  <th className="px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Status
-                  </th>
-
-                  <th className="px-5 py-4 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Aksi
-                  </th>
-                </tr>
-              </thead>
-
-              <tbody className="divide-y divide-slate-100">
-                {loading ? (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      className="px-5 py-12 text-center text-sm text-slate-500"
-                    >
-                      Memuat data kelas...
-                    </td>
-                  </tr>
-                ) : filteredClasses.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      className="px-5 py-12 text-center"
-                    >
-                      <div className="mx-auto flex max-w-sm flex-col items-center">
-                        <div className="mb-3 rounded-2xl bg-slate-100 p-4 text-slate-400">
-                          <BookOpen size={25} />
-                        </div>
-
-                        <p className="font-semibold text-slate-800">
-                          Belum ada kelas
-                        </p>
-
-                        <p className="mt-1 text-sm text-slate-500">
-                          Tambahkan kelas baru untuk
-                          mulai mengatur pembelajaran.
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
-                  filteredClasses.map((item) => (
-                    <tr
-                      key={item.id}
-                      className="transition hover:bg-slate-50/70"
-                    >
-                      <td className="px-5 py-4">
-                        <div>
-                          <p className="font-semibold text-slate-900">
-                            {item.class_name}
-                          </p>
-
-                          <p className="mt-1 text-sm text-slate-500">
-                            {item.subject}
-                          </p>
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
-                            <UserRound size={17} />
-                          </div>
-
-                          <div>
-                            <p className="text-sm font-semibold text-slate-800">
-                              {item.tutor
-                                ?.full_name ??
-                                'Belum ditentukan'}
-                            </p>
-
-                            {item.tutor
-                              ?.phone_number && (
-                              <p className="text-xs text-slate-400">
-                                {
-                                  item.tutor
-                                    .phone_number
-                                }
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="flex items-center gap-2 text-sm text-slate-700">
-                          <CalendarDays
-                            size={16}
-                            className="text-slate-400"
-                          />
-                          <span>
-                            {formatDay(
-                              item.schedule_day
-                            )}
-                          </span>
-                        </div>
-
-                        <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                          <Clock3
-                            size={14}
-                            className="text-slate-400"
-                          />
-                          <span>
-                            {formatTime(
-                              item.schedule_start
-                            )}{' '}
-                            –{' '}
-                            {formatTime(
-                              item.schedule_end
-                            )}
-                          </span>
-                        </div>
-                      </td>
-
-                      <td className="px-5 py-4">
-                        {item.status === 'ACTIVE' ? (
-                          <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                            Aktif
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                            Tidak Aktif
-                          </span>
-                        )}
-                      </td>
-
-                      <td className="px-5 py-4">
-                        <div className="flex justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openEditModal(item)
-                            }
-                            className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-                            aria-label="Edit kelas"
-                          >
-                            <Edit3 size={17} />
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openDeleteModal(item)
-                            }
-                            className="rounded-lg p-2 text-slate-500 transition hover:bg-red-50 hover:text-red-600"
-                            aria-label="Hapus kelas"
-                          >
-                            <Trash2 size={17} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                    aria-label="Hapus pencarian"
+                  >
+                    <X size={16} />
+                  </button>
                 )}
-              </tbody>
-            </table>
+              </div>
+
+              <select
+                value={statusFilter}
+                onChange={(event) =>
+                  setStatusFilter(
+                    event.target.value as
+                      | 'ALL'
+                      | 'ACTIVE'
+                      | 'INACTIVE'
+                  )
+                }
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 outline-none transition focus:border-red-400 focus:bg-white focus:ring-2 focus:ring-red-100 lg:w-52"
+              >
+                <option value="ALL">
+                  Semua Status
+                </option>
+                <option value="ACTIVE">
+                  Aktif
+                </option>
+                <option value="INACTIVE">
+                  Tidak Aktif
+                </option>
+              </select>
+            </div>
+
+            <p className="mt-3 text-xs text-slate-400">
+              Menampilkan {filteredClasses.length} dari{' '}
+              {totalClasses} kelas
+            </p>
           </div>
+
+          {/* CONTENT */}
+          {loading ? (
+            <div className="flex min-h-64 items-center justify-center rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2
+                  size={28}
+                  className="animate-spin text-red-500"
+                />
+
+                <p className="text-sm text-slate-500">
+                  Memuat data kelas...
+                </p>
+              </div>
+            </div>
+          ) : filteredClasses.length === 0 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white px-6 py-16 text-center shadow-sm">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
+                <BookOpen size={25} />
+              </div>
+
+              <h3 className="mt-4 font-semibold text-slate-900">
+                {classes.length === 0
+                  ? 'Belum ada kelas'
+                  : 'Kelas tidak ditemukan'}
+              </h3>
+
+              <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
+                {classes.length === 0
+                  ? 'Tambahkan kelas pertama untuk mulai mengatur jadwal dan tutor.'
+                  : 'Coba gunakan kata kunci pencarian atau filter status yang berbeda.'}
+              </p>
+
+              {classes.length === 0 && (
+                <button
+                  type="button"
+                  onClick={openCreateModal}
+                  className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#E53935] to-[#FF5722] px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md"
+                >
+                  <Plus size={17} />
+                  Tambah Kelas
+                </button>
+              )}
+            </div>
+          ) : (
+            /* CARD GRID */
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {filteredClasses.map((item) => {
+                const tutorName = getTutorName(item)
+
+                return (
+                  <div
+                    key={item.id}
+                    className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+                  >
+                    {/* CARD HEADER */}
+                    <div className="border-b border-slate-100 p-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600">
+                            <BookOpen size={20} />
+                          </div>
+
+                          <div className="min-w-0">
+                            <h3 className="truncate font-semibold text-slate-900">
+                              {item.class_name}
+                            </h3>
+
+                            <p className="mt-1 text-sm text-slate-500">
+                              {item.subject}
+                            </p>
+                          </div>
+                        </div>
+
+                        <span
+                          className={`
+                            shrink-0
+                            rounded-full
+                            px-2.5
+                            py-1
+                            text-[11px]
+                            font-semibold
+                            ${
+                              item.status === 'ACTIVE'
+                                ? 'bg-emerald-50 text-emerald-700'
+                                : 'bg-slate-100 text-slate-500'
+                            }
+                          `}
+                        >
+                          {item.status === 'ACTIVE'
+                            ? 'Aktif'
+                            : 'Tidak Aktif'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* CARD BODY */}
+                    <div className="space-y-4 p-5">
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 text-slate-400">
+                          <UserRound size={18} />
+                        </div>
+
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-slate-400">
+                            Tutor
+                          </p>
+
+                          <p className="mt-1 truncate text-sm font-medium text-slate-700">
+                            {tutorName}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 text-slate-400">
+                          <CalendarDays size={18} />
+                        </div>
+
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-slate-400">
+                            Jadwal
+                          </p>
+
+                          <p className="mt-1 text-sm font-medium text-slate-700">
+                            {DAY_LABELS[item.schedule_day] ??
+                              item.schedule_day}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-start gap-3">
+                        <div className="mt-0.5 text-slate-400">
+                          <Clock3 size={18} />
+                        </div>
+
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-slate-400">
+                            Waktu
+                          </p>
+
+                          <p className="mt-1 text-sm font-medium text-slate-700">
+                            {item.schedule_start} –{' '}
+                            {item.schedule_end}
+                          </p>
+                        </div>
+                      </div>
+
+                      {item.description && (
+                        <div className="rounded-xl bg-slate-50 p-3.5">
+                          <p className="text-xs font-medium text-slate-400">
+                            Deskripsi
+                          </p>
+
+                          <p className="mt-1.5 text-sm leading-5 text-slate-600">
+                            {item.description}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* CARD ACTIONS */}
+                    <div className="flex items-center gap-2 border-t border-slate-100 bg-slate-50/70 p-4">
+                      <button
+                        type="button"
+                        onClick={() => openEditModal(item)}
+                        className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
+                      >
+                        <Edit3 size={16} />
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => openDeleteModal(item)}
+                        className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2.5 text-sm font-semibold text-red-600 transition hover:border-red-200 hover:bg-red-100"
+                      >
+                        <Trash2 size={16} />
+                        Hapus
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       </main>
 
-      {/* ===================================== */}
       {/* CREATE / EDIT MODAL */}
-      {/* ===================================== */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/40 p-0 backdrop-blur-sm sm:items-center sm:p-4">
-          <div className="max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-w-2xl sm:rounded-3xl">
-            <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4 sm:px-6">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  {editingClass
-                    ? 'Edit Kelas'
-                    : 'Tambah Kelas'}
-                </h2>
+        <div className="fixed inset-0 z-[60] overflow-y-auto bg-slate-900/60 p-3 sm:p-5">
+          <div className="flex min-h-full items-center justify-center py-4 sm:py-8">
+            <div className="my-auto flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100vh-4rem)]">
+              {/* MODAL HEADER */}
+              <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-5 py-4 sm:px-6">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    {editingClass
+                      ? 'Edit Kelas'
+                      : 'Tambah Kelas'}
+                  </h2>
 
-                <p className="mt-0.5 text-xs text-slate-500">
-                  Isi informasi kelas dan jadwal
-                  pembelajaran.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={closeModal}
-                disabled={saving}
-                className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Tutup"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleSubmit}
-              className="space-y-5 p-5 sm:p-6"
-            >
-              {error && (
-                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                  {error}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div>
-                  <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                    Nama Kelas
-                  </label>
-
-                  <input
-                    type="text"
-                    value={form.className}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        className:
-                          event.target.value,
-                      }))
-                    }
-                    placeholder="Contoh: Fisika X"
-                    required
-                    className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                    Mata Pelajaran
-                  </label>
-
-                  <input
-                    type="text"
-                    value={form.subject}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        subject:
-                          event.target.value,
-                      }))
-                    }
-                    placeholder="Contoh: Fisika"
-                    required
-                    className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                  Tutor
-                </label>
-
-                <select
-                  value={form.tutorId}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      tutorId:
-                        event.target.value,
-                    }))
-                  }
-                  required
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-slate-400"
-                >
-                  <option value="">
-                    Pilih tutor
-                  </option>
-
-                  {tutors.map((tutor) => (
-                    <option
-                      key={tutor.id}
-                      value={tutor.id}
-                    >
-                      {tutor.full_name}
-                    </option>
-                  ))}
-                </select>
-
-                {tutors.length === 0 && (
-                  <p className="mt-1.5 text-xs text-amber-600">
-                    Belum ada akun Tutor. Tambahkan
-                    Tutor melalui menu Pengguna.
+                  <p className="mt-0.5 text-sm text-slate-500">
+                    {editingClass
+                      ? 'Perbarui informasi kelas.'
+                      : 'Tambahkan kelas baru ke Nagala Education.'}
                   </p>
-                )}
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                  Deskripsi
-                  <span className="ml-1 font-normal text-slate-400">
-                    (opsional)
-                  </span>
-                </label>
-
-                <textarea
-                  value={form.description}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      description:
-                        event.target.value,
-                    }))
-                  }
-                  rows={3}
-                  placeholder="Deskripsi singkat kelas..."
-                  className="w-full resize-none rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none transition placeholder:text-slate-400 focus:border-slate-400"
-                />
-              </div>
-
-              <div className="border-t border-slate-100 pt-5">
-                <div className="mb-4 flex items-center gap-2">
-                  <CalendarDays
-                    size={18}
-                    className="text-slate-500"
-                  />
-                  <h3 className="text-sm font-bold text-slate-800">
-                    Jadwal Pembelajaran
-                  </h3>
                 </div>
 
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                  <div>
-                    <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      Hari
-                    </label>
-
-                    <select
-                      value={form.scheduleDay}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          scheduleDay:
-                            event.target.value,
-                        }))
-                      }
-                      className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-slate-400"
-                    >
-                      {Object.entries(
-                        DAY_LABELS
-                      ).map(([value, label]) => (
-                        <option
-                          key={value}
-                          value={value}
-                        >
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      Jam Mulai
-                    </label>
-
-                    <input
-                      type="time"
-                      value={form.scheduleStart}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          scheduleStart:
-                            event.target.value,
-                        }))
-                      }
-                      required
-                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-slate-400"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                      Jam Selesai
-                    </label>
-
-                    <input
-                      type="time"
-                      value={form.scheduleEnd}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          scheduleEnd:
-                            event.target.value,
-                        }))
-                      }
-                      required
-                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm outline-none focus:border-slate-400"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="mb-1.5 block text-sm font-semibold text-slate-700">
-                  Status
-                </label>
-
-                <select
-                  value={form.status}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      status:
-                        event.target.value as
-                          | 'ACTIVE'
-                          | 'INACTIVE',
-                    }))
-                  }
-                  className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-slate-400"
-                >
-                  <option value="ACTIVE">
-                    Aktif
-                  </option>
-                  <option value="INACTIVE">
-                    Tidak Aktif
-                  </option>
-                </select>
-              </div>
-
-              <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:justify-end">
                 <button
                   type="button"
                   onClick={closeModal}
                   disabled={saving}
-                  className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className="ml-4 shrink-0 rounded-xl p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-label="Tutup modal"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              {/* SCROLLABLE FORM AREA */}
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <form
+  id="class-form"
+  onSubmit={handleSubmit}
+  noValidate
+  className="space-y-5 p-5 sm:p-6"
+>
+                  {/* NAMA + SUBJECT */}
+                  <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                    <div>
+                      <label
+                        htmlFor="className"
+                        className="mb-2 block text-sm font-semibold text-slate-700"
+                      >
+                        Nama Kelas
+                        <span className="ml-1 text-red-500">
+                          *
+                        </span>
+                      </label>
+
+                      <input
+                        id="className"
+                        type="text"
+                        value={form.className}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            className: event.target.value,
+                          }))
+                        }
+                        maxLength={100}
+                        placeholder="Contoh: Matematika Kelas 6"
+                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                      />
+
+                      <p className="mt-1.5 text-xs text-slate-400">
+                        {form.className.length}/100 karakter
+                      </p>
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="subject"
+                        className="mb-2 block text-sm font-semibold text-slate-700"
+                      >
+                        Mata Pelajaran
+                        <span className="ml-1 text-red-500">
+                          *
+                        </span>
+                      </label>
+
+                      <input
+                        id="subject"
+                        type="text"
+                        value={form.subject}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            subject: event.target.value,
+                          }))
+                        }
+                        maxLength={100}
+                        placeholder="Contoh: Matematika"
+                        className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                      />
+
+                      <p className="mt-1.5 text-xs text-slate-400">
+                        {form.subject.length}/100 karakter
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* TUTOR */}
+                  <div>
+                    <label
+                      htmlFor="tutorId"
+                      className="mb-2 block text-sm font-semibold text-slate-700"
+                    >
+                      Tutor
+                      <span className="ml-1 text-red-500">
+                        *
+                      </span>
+                    </label>
+
+                    <select
+                      id="tutorId"
+                      value={form.tutorId}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          tutorId: event.target.value,
+                        }))
+                      }
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                    >
+                      <option value="">
+                        Pilih tutor
+                      </option>
+
+                      {tutors.map((tutor) => (
+                        <option
+                          key={tutor.id}
+                          value={tutor.id}
+                        >
+                          {tutor.full_name}
+                        </option>
+                      ))}
+                    </select>
+
+                    {tutors.length === 0 && (
+                      <p className="mt-2 text-xs text-amber-600">
+                        Belum ada tutor yang tersedia.
+                      </p>
+                    )}
+                  </div>
+
+                  {/* JADWAL */}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
+                    <div className="mb-4 flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-red-600 shadow-sm">
+                        <CalendarDays size={18} />
+                      </div>
+
+                      <div>
+                        <h3 className="text-sm font-semibold text-slate-800">
+                          Jadwal Kelas
+                        </h3>
+
+                        <p className="text-xs text-slate-400">
+                          Tentukan hari dan waktu pembelajaran.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                      <div>
+                        <label
+                          htmlFor="scheduleDay"
+                          className="mb-2 block text-sm font-semibold text-slate-700"
+                        >
+                          Hari
+                          <span className="ml-1 text-red-500">
+                            *
+                          </span>
+                        </label>
+
+                        <select
+                          id="scheduleDay"
+                          value={form.scheduleDay}
+                          onChange={(event) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              scheduleDay: event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                        >
+                          {DAYS.map((day) => (
+                            <option
+                              key={day}
+                              value={day}
+                            >
+                              {DAY_LABELS[day]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="scheduleStart"
+                          className="mb-2 block text-sm font-semibold text-slate-700"
+                        >
+                          Jam Mulai
+                          <span className="ml-1 text-red-500">
+                            *
+                          </span>
+                        </label>
+
+                        <input
+                          id="scheduleStart"
+                          type="time"
+                          value={form.scheduleStart}
+                          onChange={(event) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              scheduleStart:
+                                event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          htmlFor="scheduleEnd"
+                          className="mb-2 block text-sm font-semibold text-slate-700"
+                        >
+                          Jam Selesai
+                          <span className="ml-1 text-red-500">
+                            *
+                          </span>
+                        </label>
+
+                        <input
+                          id="scheduleEnd"
+                          type="time"
+                          value={form.scheduleEnd}
+                          onChange={(event) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              scheduleEnd:
+                                event.target.value,
+                            }))
+                          }
+                          className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* STATUS */}
+                  <div>
+                    <label
+                      htmlFor="status"
+                      className="mb-2 block text-sm font-semibold text-slate-700"
+                    >
+                      Status
+                      <span className="ml-1 text-red-500">
+                        *
+                      </span>
+                    </label>
+
+                    <select
+                      id="status"
+                      value={form.status}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          status: event.target.value as ClassStatus,
+                        }))
+                      }
+                      className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                    >
+                      <option value="ACTIVE">
+                        Aktif
+                      </option>
+
+                      <option value="INACTIVE">
+                        Tidak Aktif
+                      </option>
+                    </select>
+                  </div>
+
+                  {/* DESCRIPTION */}
+                  <div>
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <label
+                        htmlFor="description"
+                        className="block text-sm font-semibold text-slate-700"
+                      >
+                        Deskripsi
+                      </label>
+
+                      <span className="text-xs text-slate-400">
+                        {form.description.length}/500
+                      </span>
+                    </div>
+
+                    <textarea
+                      id="description"
+                      value={form.description}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          description: event.target.value,
+                        }))
+                      }
+                      maxLength={500}
+                      rows={4}
+                      placeholder="Tambahkan deskripsi singkat mengenai kelas..."
+                      className="w-full resize-y rounded-xl border border-slate-200 px-4 py-3 text-sm leading-6 text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-red-400 focus:ring-2 focus:ring-red-100"
+                    />
+                  </div>
+
+                  {/* MOBILE EXTRA SPACE */}
+                  <div className="h-1 sm:h-0" />
+                </form>
+              </div>
+
+              {/* MODAL FOOTER */}
+              <div className="shrink-0 border-t border-slate-200 bg-white px-5 py-4 sm:px-6">
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={closeModal}
+                    disabled={saving}
+                    className="w-full rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                  >
+                    Batal
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const formElement =
+                        document.querySelector(
+                          '#class-form'
+                        ) as HTMLFormElement | null
+
+                      formElement?.requestSubmit()
+                    }}
+                    disabled={saving}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#E53935] to-[#FF5722] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                  >
+                    {saving ? (
+                      <>
+                        <Loader2
+                          size={17}
+                          className="animate-spin"
+                        />
+                        Menyimpan...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={17} />
+                        {editingClass
+                          ? 'Simpan Perubahan'
+                          : 'Simpan Kelas'}
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE MODAL */}
+      {deleteModalOpen && deleteTarget && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-900/60 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+            <div className="p-5 sm:p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-600">
+                  <Trash2 size={20} />
+                </div>
+
+                <div className="min-w-0">
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Hapus Kelas?
+                  </h2>
+
+                  <p className="mt-1 text-sm leading-6 text-slate-500">
+                    Kelas ini akan dihapus secara permanen
+                    dari sistem.
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <p className="font-semibold text-slate-800">
+                  {deleteTarget.class_name}
+                </p>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  {deleteTarget.subject}
+                </p>
+
+                <p className="mt-2 text-xs text-slate-400">
+                  {DAY_LABELS[deleteTarget.schedule_day] ??
+                    deleteTarget.schedule_day}{' '}
+                  • {deleteTarget.schedule_start} –{' '}
+                  {deleteTarget.schedule_end}
+                </p>
+              </div>
+
+              <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={closeDeleteModal}
+                  disabled={Boolean(deletingId)}
+                  className="w-full rounded-xl border border-slate-200 px-5 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                 >
                   Batal
                 </button>
 
                 <button
-                  type="submit"
-                  disabled={saving}
-                  className="rounded-xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={Boolean(deletingId)}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                 >
-                  {saving
-                    ? 'Menyimpan...'
-                    : editingClass
-                      ? 'Simpan Perubahan'
-                      : 'Tambah Kelas'}
+                  {deletingId ? (
+                    <>
+                      <Loader2
+                        size={17}
+                        className="animate-spin"
+                      />
+                      Menghapus...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={17} />
+                      Ya, Hapus
+                    </>
+                  )}
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ===================================== */}
-      {/* DELETE MODAL */}
-      {/* ===================================== */}
-      {deleteOpen && deletingClass && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-red-50 text-red-600">
-              <Trash2 size={22} />
-            </div>
-
-            <h2 className="text-lg font-bold text-slate-900">
-              Hapus Kelas?
-            </h2>
-
-            <p className="mt-2 text-sm leading-6 text-slate-500">
-              Kelas{' '}
-              <span className="font-semibold text-slate-800">
-                {deletingClass.class_name}
-              </span>{' '}
-              akan dihapus secara permanen. Data
-              terkait yang masih memiliki hubungan
-              dengan kelas dapat mencegah proses
-              penghapusan.
-            </p>
-
-            {error && (
-              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={closeDeleteModal}
-                disabled={saving}
-                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-              >
-                Batal
-              </button>
-
-              <button
-                type="button"
-                onClick={handleDelete}
-                disabled={saving}
-                className="rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-60"
-              >
-                {saving
-                  ? 'Menghapus...'
-                  : 'Hapus Permanen'}
-              </button>
             </div>
           </div>
         </div>

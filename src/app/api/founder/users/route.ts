@@ -1,28 +1,74 @@
 import { NextResponse } from "next/server"
+
 import { createClient } from "@/lib/supabase/server"
 import { createAdminClient } from "@/lib/supabase/admin"
 
-type UserRole = "Founder" | "Tutor" | "Parent"
-
-async function requireFounder(): Promise<
-  | {
-      authorized: true
-      user: NonNullable<
-        Awaited<
-          ReturnType<
-            Awaited<
-              ReturnType<typeof createClient>
-            >["auth"]["getUser"]
-          >
-        >["data"]["user"]
+type FounderAuthSuccess = {
+  authorized: true
+  user: NonNullable<
+    Awaited<
+      ReturnType<
+        Awaited<ReturnType<typeof createClient>>["auth"]["getUser"]
       >
-      supabase: Awaited<ReturnType<typeof createClient>>
-    }
-  | {
-      authorized: false
-      response: NextResponse
-    }
-> {
+    >["data"]["user"]
+  >
+  supabase: Awaited<ReturnType<typeof createClient>>
+}
+
+type FounderAuthFailure = {
+  authorized: false
+  response: NextResponse
+}
+
+type FounderAuthResult =
+  | FounderAuthSuccess
+  | FounderAuthFailure
+
+function isValidEmail(email: unknown): email is string {
+  if (typeof email !== "string") {
+    return false
+  }
+
+  const normalized = email.trim()
+
+  return (
+    normalized.length <= 254 &&
+    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(
+      normalized
+    )
+  )
+}
+
+function isValidPhone(phone: unknown): phone is string {
+  return (
+    typeof phone === "string" &&
+    /^\d{10,13}$/.test(phone)
+  )
+}
+
+function isValidFullName(fullName: unknown): fullName is string {
+  if (typeof fullName !== "string") {
+    return false
+  }
+
+  const trimmed = fullName.trim()
+
+  return (
+    trimmed.length >= 2 &&
+    trimmed.length <= 100 &&
+    !/[\u0000-\u001F\u007F]/.test(trimmed)
+  )
+}
+
+function isValidPassword(password: unknown): password is string {
+  return (
+    typeof password === "string" &&
+    password.length >= 6 &&
+    password.length <= 128
+  )
+}
+
+async function requireFounder(): Promise<FounderAuthResult> {
   const supabase = await createClient()
 
   const {
@@ -33,28 +79,32 @@ async function requireFounder(): Promise<
     return {
       authorized: false,
       response: NextResponse.json(
-        { error: "Anda belum login." },
-        { status: 401 }
+        {
+          error: "Anda belum login.",
+        },
+        {
+          status: 401,
+        }
       ),
     }
   }
 
-  const { data: profile, error } =
-    await supabase
-      .from("profiles")
-      .select("id, role_id, full_name, phone_number")
-      .eq("id", user.id)
-      .single()
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("id, role_id")
+    .eq("id", user.id)
+    .single()
 
   if (error || !profile) {
     return {
       authorized: false,
       response: NextResponse.json(
         {
-          error:
-            "Profil pengguna tidak ditemukan.",
+          error: "Profil pengguna tidak ditemukan.",
         },
-        { status: 403 }
+        {
+          status: 403,
+        }
       ),
     }
   }
@@ -66,7 +116,9 @@ async function requireFounder(): Promise<
         {
           error: "Akses hanya untuk Founder.",
         },
-        { status: 403 }
+        {
+          status: 403,
+        }
       ),
     }
   }
@@ -137,7 +189,7 @@ export async function GET() {
 
 /**
  * POST
- * Membuat akun baru.
+ * Membuat akun Tutor atau Parent baru.
  */
 export async function POST(request: Request) {
   try {
@@ -147,7 +199,35 @@ export async function POST(request: Request) {
       return auth.response
     }
 
-    const body = await request.json()
+    let body: unknown
+
+    try {
+      body = await request.json()
+    } catch {
+      return NextResponse.json(
+        {
+          error: "Format request JSON tidak valid.",
+        },
+        {
+          status: 400,
+        }
+      )
+    }
+
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      Array.isArray(body)
+    ) {
+      return NextResponse.json(
+        {
+          error: "Data request tidak valid.",
+        },
+        {
+          status: 400,
+        }
+      )
+    }
 
     const {
       email,
@@ -155,18 +235,46 @@ export async function POST(request: Request) {
       fullName,
       phoneNumber,
       roleId,
-    } = body
+    } = body as Record<string, unknown>
 
-    if (
-      !email ||
-      !password ||
-      !fullName ||
-      !roleId
-    ) {
+    /**
+     * Email
+     */
+    if (!isValidEmail(email)) {
+      return NextResponse.json(
+        {
+          error: "Format email tidak valid.",
+        },
+        {
+          status: 400,
+        }
+      )
+    }
+
+    const normalizedEmail = email.trim().toLowerCase()
+
+    /**
+     * Password
+     */
+    if (!isValidPassword(password)) {
+      return NextResponse.json(
+        {
+          error: "Password harus 6–128 karakter.",
+        },
+        {
+          status: 400,
+        }
+      )
+    }
+
+    /**
+     * Nama lengkap
+     */
+    if (!isValidFullName(fullName)) {
       return NextResponse.json(
         {
           error:
-            "Email, password, nama lengkap, dan role wajib diisi.",
+            "Nama lengkap wajib diisi dan harus terdiri dari 2–100 karakter.",
         },
         {
           status: 400,
@@ -174,23 +282,42 @@ export async function POST(request: Request) {
       )
     }
 
+    const normalizedFullName = fullName.trim()
+
+    /**
+     * Nomor telepon
+     *
+     * Wajib:
+     * - hanya angka
+     * - 10–13 digit
+     */
+    if (!isValidPhone(phoneNumber)) {
+      return NextResponse.json(
+        {
+          error:
+            "Nomor telepon wajib diisi dan harus terdiri dari 10–13 digit angka.",
+        },
+        {
+          status: 400,
+        }
+      )
+    }
+
+    /**
+     * Role
+     *
+     * Founder (1) TIDAK BOLEH dibuat melalui endpoint ini.
+     * Hanya:
+     * 2 = Tutor
+     * 3 = Parent
+     */
     const parsedRoleId = Number(roleId)
 
-    if (![1, 2, 3].includes(parsedRoleId)) {
+    if (![2, 3].includes(parsedRoleId)) {
       return NextResponse.json(
         {
-          error: "Role tidak valid.",
-        },
-        {
-          status: 400,
-        }
-      )
-    }
-
-    if (password.length < 6) {
-      return NextResponse.json(
-        {
-          error: "Password minimal 6 karakter.",
+          error:
+            "Role tidak valid. Akun baru hanya dapat dibuat sebagai Tutor atau Orang Tua.",
         },
         {
           status: 400,
@@ -201,20 +328,19 @@ export async function POST(request: Request) {
     const admin = createAdminClient()
 
     /**
-     * 1. Buat akun Authentication.
+     * Buat akun Authentication.
      */
     const {
       data: createdUser,
       error: authError,
-    } =
-      await admin.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: {
-          full_name: fullName,
-        },
-      })
+    } = await admin.auth.admin.createUser({
+      email: normalizedEmail,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        full_name: normalizedFullName,
+      },
+    })
 
     if (authError || !createdUser.user) {
       console.error("CREATE AUTH USER ERROR:", authError)
@@ -232,20 +358,19 @@ export async function POST(request: Request) {
     }
 
     /**
-     * 2. Buat profile.
+     * Buat profile.
      */
-    const { error: profileError } =
-      await admin
-        .from("profiles")
-        .insert({
-          id: createdUser.user.id,
-          full_name: fullName,
-          phone_number: phoneNumber || null,
-          role_id: parsedRoleId,
-        })
+    const { error: profileError } = await admin
+      .from("profiles")
+      .insert({
+        id: createdUser.user.id,
+        full_name: normalizedFullName,
+        phone_number: phoneNumber,
+        role_id: parsedRoleId,
+      })
 
     /**
-     * Kalau profile gagal dibuat,
+     * Jika profile gagal dibuat,
      * hapus kembali akun Authentication
      * agar tidak ada akun yatim.
      */
@@ -262,7 +387,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Akun berhasil dibuat tetapi profil gagal disimpan.",
+            "Akun gagal dibuat karena profil tidak dapat disimpan.",
         },
         {
           status: 500,
@@ -276,8 +401,8 @@ export async function POST(request: Request) {
         user: {
           id: createdUser.user.id,
           email: createdUser.user.email,
-          fullName,
-          phoneNumber: phoneNumber || null,
+          fullName: normalizedFullName,
+          phoneNumber,
           roleId: parsedRoleId,
         },
       },
@@ -286,7 +411,10 @@ export async function POST(request: Request) {
       }
     )
   } catch (error) {
-    console.error("CREATE USER SERVER ERROR:", error)
+    console.error(
+      "CREATE USER SERVER ERROR:",
+      error
+    )
 
     return NextResponse.json(
       {

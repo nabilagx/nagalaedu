@@ -4,13 +4,16 @@ import Link from "next/link"
 
 import {
   useEffect,
+  useRef,
   useState,
 } from "react"
 
 import {
+  AlertCircle,
   ArrowLeft,
   BookOpen,
   CalendarDays,
+  CheckCircle2,
   ClipboardCheck,
   FileText,
   GraduationCap,
@@ -48,6 +51,65 @@ type FeedbackDetail = {
   updated_at: string
 }
 
+type ToastType = "success" | "error" | "info"
+
+type Toast = {
+  type: ToastType
+  message: string
+}
+
+function ToastView({
+  toast,
+}: {
+  toast: Toast
+}) {
+  const isSuccess = toast.type === "success"
+  const isError = toast.type === "error"
+
+  return (
+    <div
+      className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm"
+      aria-live="polite"
+    >
+      <div
+        className={`rounded-2xl border bg-white p-4 shadow-xl ${
+          isSuccess
+            ? "border-emerald-200"
+            : isError
+              ? "border-red-200"
+              : "border-blue-200"
+        }`}
+      >
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 shrink-0">
+            {isSuccess ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            ) : isError ? (
+              <XCircle className="h-5 w-5 text-red-600" />
+            ) : (
+              <AlertCircle className="h-5 w-5 text-blue-600" />
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-900">
+              {isSuccess
+                ? "Berhasil"
+                : isError
+                  ? "Gagal"
+                  : "Informasi"}
+            </p>
+
+            <p className="mt-1 text-sm leading-5 text-gray-600">
+              {toast.message}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function TutorFeedbackDetailPage({
   params,
 }: {
@@ -56,9 +118,7 @@ export default function TutorFeedbackDetailPage({
   }>
 }) {
   const [feedback, setFeedback] =
-    useState<FeedbackDetail | null>(
-      null
-    )
+    useState<FeedbackDetail | null>(null)
 
   const [loading, setLoading] =
     useState(true)
@@ -78,9 +138,6 @@ export default function TutorFeedbackDetailPage({
   const [deleting, setDeleting] =
     useState(false)
 
-  const [editError, setEditError] =
-    useState("")
-
   const [form, setForm] =
     useState({
       subject: "",
@@ -91,6 +148,43 @@ export default function TutorFeedbackDetailPage({
 
   const [feedbackId, setFeedbackId] =
     useState("")
+
+  const [showDelete, setShowDelete] =
+    useState(false)
+
+  const [toast, setToast] =
+    useState<Toast | null>(null)
+
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+
+  function showToast(
+    type: ToastType,
+    message: string
+  ) {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current)
+    }
+
+    setToast({
+      type,
+      message,
+    })
+
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null)
+      toastTimeoutRef.current = null
+    }, 3500)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current)
+      }
+    }
+  }, [])
 
   async function loadFeedback(
     showRefresh = false
@@ -149,12 +243,24 @@ export default function TutorFeedbackDetailPage({
           result.feedback.feedback_notes ??
           "",
       })
+
+      if (showRefresh) {
+        showToast(
+          "success",
+          "Data feedback berhasil diperbarui."
+        )
+      }
     } catch (err) {
-      setError(
+      const message =
         err instanceof Error
           ? err.message
           : "Terjadi kesalahan saat memuat feedback."
-      )
+
+      setError(message)
+
+      if (showRefresh) {
+        showToast("error", message)
+      }
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -172,7 +278,6 @@ export default function TutorFeedbackDetailPage({
 
     try {
       setSaving(true)
-      setEditError("")
 
       const response = await fetch(
         `/api/tutor/feedback/${feedbackId}`,
@@ -206,25 +311,28 @@ export default function TutorFeedbackDetailPage({
       setEditing(false)
 
       await loadFeedback()
+
+      showToast(
+        "success",
+        "Feedback berhasil diperbarui."
+      )
     } catch (err) {
-      setEditError(
+      showToast(
+        "error",
         err instanceof Error
           ? err.message
-          : "Gagal menyimpan feedback."
+          : "Gagal memperbarui feedback."
       )
     } finally {
       setSaving(false)
     }
   }
 
+  function openDelete() {
+    setShowDelete(true)
+  }
+
   async function handleDelete() {
-    const confirmed =
-      window.confirm(
-        "Hapus feedback ini? Data nilai dan feedback pada record grades ini juga akan dihapus."
-      )
-
-    if (!confirmed) return
-
     try {
       setDeleting(true)
 
@@ -245,10 +353,20 @@ export default function TutorFeedbackDetailPage({
         )
       }
 
-      window.location.href =
-        "/dashboard/tutor/feedback"
+      setShowDelete(false)
+
+      showToast(
+        "success",
+        "Feedback berhasil dihapus."
+      )
+
+      window.setTimeout(() => {
+        window.location.href =
+          "/dashboard/tutor/feedback"
+      }, 800)
     } catch (err) {
-      setError(
+      showToast(
+        "error",
         err instanceof Error
           ? err.message
           : "Gagal menghapus feedback."
@@ -336,8 +454,11 @@ export default function TutorFeedbackDetailPage({
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-5xl space-y-6">
+      {toast && (
+        <ToastView toast={toast} />
+      )}
 
+      <div className="mx-auto max-w-5xl space-y-6">
         {/* HEADER */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -383,7 +504,8 @@ export default function TutorFeedbackDetailPage({
                     : ""
                 }`}
               />
-              Refresh
+
+              Perbarui Data
             </button>
 
             {!editing && (
@@ -401,7 +523,7 @@ export default function TutorFeedbackDetailPage({
 
                 <button
                   type="button"
-                  onClick={handleDelete}
+                  onClick={openDelete}
                   disabled={deleting}
                   className="inline-flex items-center gap-2 rounded-xl border border-red-200 bg-white px-4 py-2.5 text-sm font-semibold text-red-600 transition hover:bg-red-50 disabled:opacity-60"
                 >
@@ -410,6 +532,7 @@ export default function TutorFeedbackDetailPage({
                   ) : (
                     <Trash2 className="h-4 w-4" />
                   )}
+
                   Hapus
                 </button>
               </>
@@ -478,9 +601,11 @@ export default function TutorFeedbackDetailPage({
 
                   <span>
                     {feedback.schedule_day}
+
                     {feedback.schedule_start
                       ? ` · ${feedback.schedule_start}`
                       : ""}
+
                     {feedback.schedule_end
                       ? ` - ${feedback.schedule_end}`
                       : ""}
@@ -508,12 +633,6 @@ export default function TutorFeedbackDetailPage({
             </div>
 
             <div className="space-y-4 p-5">
-              {editError && (
-                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                  {editError}
-                </div>
-              )}
-
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field
                   label="Mata Pelajaran"
@@ -590,10 +709,9 @@ export default function TutorFeedbackDetailPage({
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={() =>
                     setEditing(false)
-                    setEditError("")
-                  }}
+                  }
                   className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
                 >
                   Batal
@@ -694,8 +812,65 @@ export default function TutorFeedbackDetailPage({
             </div>
           </section>
         )}
-
       </div>
+
+      {showDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6">
+          <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+            <div className="px-5 py-5">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
+                <Trash2 className="h-5 w-5 text-red-600" />
+              </div>
+
+              <div className="mt-4 text-center">
+                <h2 className="text-lg font-bold text-gray-900">
+                  Hapus Feedback?
+                </h2>
+
+                <p className="mt-2 text-sm leading-6 text-gray-500">
+                  Feedback untuk siswa{" "}
+                  <span className="font-semibold text-gray-700">
+                    {feedback.student_name}
+                  </span>{" "}
+                  akan dihapus. Data nilai dan feedback pada record grades ini juga akan dihapus. Tindakan ini tidak dapat dibatalkan.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 border-t border-gray-100 px-5 py-4">
+              <button
+                type="button"
+                onClick={() =>
+                  setShowDelete(false)
+                }
+                disabled={deleting}
+                className="flex-1 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Batal
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {deleting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Menghapus...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    Hapus
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,9 +1,11 @@
 "use client"
 
 import Link from "next/link"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
+  AlertCircle,
   BookOpen,
+  CheckCircle2,
   ChevronRight,
   FileText,
   GraduationCap,
@@ -12,6 +14,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  X,
   XCircle,
 } from "lucide-react"
 
@@ -51,38 +54,28 @@ type ModulesData = {
   modules: LearningModule[]
 }
 
+type Notification = {
+  type: "success" | "error"
+  message: string
+}
+
 export default function TutorModulesPage() {
-  const [data, setData] =
-    useState<ModulesData | null>(null)
+  const [data, setData] = useState<ModulesData | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState("")
+  const [search, setSearch] = useState("")
+  const [selectedClass, setSelectedClass] = useState("ALL")
+  const [showCreate, setShowCreate] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState("")
 
-  const [loading, setLoading] =
-    useState(true)
+  const [notification, setNotification] =
+    useState<Notification | null>(null)
 
-  const [refreshing, setRefreshing] =
-    useState(false)
-
-  const [error, setError] =
-    useState("")
-
-  const [search, setSearch] =
-    useState("")
-
-  const [selectedClass, setSelectedClass] =
-    useState("ALL")
-
-  const [showCreate, setShowCreate] =
-    useState(false)
-
-  const [creating, setCreating] =
-    useState(false)
-
-  const [createError, setCreateError] =
-    useState("")
-
-    const [notification, setNotification] = useState<{
-    type: "success" | "error"
-    message: string
-    } | null>(null)
+  const notificationTimeoutRef = useRef<
+    ReturnType<typeof setTimeout> | null
+  >(null)
 
   const [form, setForm] = useState({
     class_id: "",
@@ -91,9 +84,43 @@ export default function TutorModulesPage() {
     file_url: "",
   })
 
-  async function loadModules(
-    showRefresh = false
+  function showNotification(
+    type: "success" | "error",
+    message: string
   ) {
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current)
+    }
+
+    setNotification({
+      type,
+      message,
+    })
+
+    notificationTimeoutRef.current = setTimeout(() => {
+      setNotification(null)
+      notificationTimeoutRef.current = null
+    }, 3500)
+  }
+
+  function closeNotification() {
+    if (notificationTimeoutRef.current) {
+      clearTimeout(notificationTimeoutRef.current)
+      notificationTimeoutRef.current = null
+    }
+
+    setNotification(null)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (notificationTimeoutRef.current) {
+        clearTimeout(notificationTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  async function loadModules(showRefresh = false) {
     try {
       if (showRefresh) {
         setRefreshing(true)
@@ -103,20 +130,16 @@ export default function TutorModulesPage() {
 
       setError("")
 
-      const response = await fetch(
-        "/api/tutor/modules",
-        {
-          method: "GET",
-          cache: "no-store",
-        }
-      )
+      const response = await fetch("/api/tutor/modules", {
+        method: "GET",
+        cache: "no-store",
+      })
 
       const result = await response.json()
 
       if (!response.ok) {
         throw new Error(
-          result.error ||
-            "Gagal memuat data modul."
+          result.error || "Gagal memuat data modul."
         )
       }
 
@@ -140,15 +163,12 @@ export default function TutorModulesPage() {
   const filteredModules = useMemo(() => {
     if (!data) return []
 
-    const keyword =
-      search.trim().toLowerCase()
+    const keyword = search.trim().toLowerCase()
 
     return data.modules.filter((module) => {
       const matchesSearch =
         !keyword ||
-        module.title
-          .toLowerCase()
-          .includes(keyword) ||
+        module.title.toLowerCase().includes(keyword) ||
         (module.description ?? "")
           .toLowerCase()
           .includes(keyword) ||
@@ -163,23 +183,15 @@ export default function TutorModulesPage() {
         selectedClass === "ALL" ||
         module.class_id === selectedClass
 
-      return (
-        matchesSearch &&
-        matchesClass
-      )
+      return matchesSearch && matchesClass
     })
-  }, [
-    data,
-    search,
-    selectedClass,
-  ])
+  }, [data, search, selectedClass])
 
   function openCreateModal() {
     setCreateError("")
 
     setForm({
-      class_id:
-        data?.classes[0]?.id ?? "",
+      class_id: data?.classes[0]?.id ?? "",
       title: "",
       description: "",
       file_url: "",
@@ -187,20 +199,6 @@ export default function TutorModulesPage() {
 
     setShowCreate(true)
   }
-
-  function showNotification(
-  type: "success" | "error",
-  message: string
-) {
-  setNotification({
-    type,
-    message,
-  })
-
-  window.setTimeout(() => {
-    setNotification(null)
-  }, 3000)
-}
 
   async function handleCreate(
     event: React.FormEvent<HTMLFormElement>
@@ -216,53 +214,49 @@ export default function TutorModulesPage() {
         {
           method: "POST",
           headers: {
-            "Content-Type":
-              "application/json",
+            "Content-Type": "application/json",
           },
           body: JSON.stringify({
             class_id: form.class_id,
             title: form.title,
-            description:
-              form.description,
-            file_url:
-              form.file_url,
+            description: form.description,
+            file_url: form.file_url,
           }),
         }
       )
 
-      const result =
-        await response.json()
+      const result = await response.json()
 
       if (!response.ok) {
         throw new Error(
-          result.error ||
-            "Gagal membuat modul."
+          result.error || "Gagal membuat modul."
         )
       }
 
       setShowCreate(false)
 
-        setForm({
+      setForm({
         class_id: "",
         title: "",
         description: "",
         file_url: "",
-        })
-
-        await loadModules()
-
-        showNotification(
-        "success",
-        "Modul berhasil ditambahkan."
-        )
+      })
 
       await loadModules()
+
+      showNotification(
+        "success",
+        "Modul berhasil ditambahkan."
+      )
     } catch (err) {
-      setCreateError(
+      const message =
         err instanceof Error
           ? err.message
           : "Gagal membuat modul."
-      )
+
+      setCreateError(message)
+
+      showNotification("error", message)
     } finally {
       setCreating(false)
     }
@@ -273,7 +267,6 @@ export default function TutorModulesPage() {
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <Loader2 className="h-8 w-8 animate-spin text-[#E53935]" />
-
           <p className="text-sm text-slate-500">
             Memuat modul belajar...
           </p>
@@ -284,59 +277,36 @@ export default function TutorModulesPage() {
 
   if (error) {
     return (
-  <>
-    {notification && (
-      <div className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm">
-        <div
-          className={[
-            "flex items-start gap-3 rounded-2xl border bg-white p-4 shadow-xl",
-            notification.type === "success"
-              ? "border-emerald-200"
-              : "border-red-200",
-          ].join(" ")}
-        >
-          <div
-            className={[
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-sm font-bold",
-              notification.type === "success"
-                ? "bg-emerald-100 text-emerald-600"
-                : "bg-red-100 text-red-600",
-            ].join(" ")}
-          >
-            {notification.type === "success"
-              ? "✓"
-              : "!"}
+      <div className="p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto max-w-7xl">
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+            <div className="flex items-start gap-3">
+              <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+
+              <div>
+                <h2 className="font-semibold text-red-800">
+                  Gagal memuat modul
+                </h2>
+
+                <p className="mt-1 text-sm text-red-700">
+                  {error}
+                </p>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => loadModules()}
+                    className="rounded-xl bg-[#E53935] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#D32F2F]"
+                  >
+                    Coba Lagi
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
-
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-[#111827]">
-              {notification.type === "success"
-                ? "Berhasil"
-                : "Terjadi Kesalahan"}
-            </p>
-
-            <p className="mt-0.5 text-sm text-slate-500">
-              {notification.message}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setNotification(null)}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-            aria-label="Tutup notifikasi"
-          >
-            ×
-          </button>
         </div>
       </div>
-    )}
-
-    <div className="p-4 sm:p-6 lg:p-8">
-      {/* isi halaman */}
-    </div>
-  </>
-)
+    )
   }
 
   if (!data) return null
@@ -344,6 +314,53 @@ export default function TutorModulesPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
+
+        {/* TOAST */}
+        {notification && (
+          <div
+            className="fixed right-4 top-4 z-[100] w-[calc(100%-2rem)] max-w-sm"
+            aria-live="polite"
+          >
+            <div
+              className={`rounded-2xl border bg-white p-4 shadow-xl ${
+                notification.type === "success"
+                  ? "border-emerald-200"
+                  : "border-red-200"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 shrink-0">
+                  {notification.type === "success" ? (
+                    <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                  ) : (
+                    <XCircle className="h-5 w-5 text-red-600" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-gray-900">
+                    {notification.type === "success"
+                      ? "Berhasil"
+                      : "Gagal"}
+                  </p>
+
+                  <p className="mt-1 text-sm leading-5 text-gray-600">
+                    {notification.message}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={closeNotification}
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                  aria-label="Tutup notifikasi"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* HEADER */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -368,32 +385,23 @@ export default function TutorModulesPage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() =>
-                loadModules(true)
-              }
+              onClick={() => loadModules(true)}
               disabled={refreshing}
               className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-[#111827] shadow-sm transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <RefreshCw
                 className={`h-4 w-4 ${
-                  refreshing
-                    ? "animate-spin"
-                    : ""
+                  refreshing ? "animate-spin" : ""
                 }`}
               />
 
-              {refreshing
-                ? "Memuat..."
-                : "Refresh"}
+              {refreshing ? "Memuat..." : "Perbarui Data"}
             </button>
 
             <button
               type="button"
               onClick={openCreateModal}
-              disabled={
-                data.classes.length ===
-                0
-              }
+              disabled={data.classes.length === 0}
               className="inline-flex items-center gap-2 rounded-xl bg-[#E53935] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#D32F2F] disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Plus className="h-4 w-4" />
@@ -405,23 +413,15 @@ export default function TutorModulesPage() {
         {/* SUMMARY */}
         <div className="grid gap-4 sm:grid-cols-2">
           <SummaryCard
-            icon={
-              <BookOpen className="h-5 w-5" />
-            }
+            icon={<BookOpen className="h-5 w-5" />}
             label="Total Modul"
-            value={
-              data.summary.total_modules
-            }
+            value={data.summary.total_modules}
           />
 
           <SummaryCard
-            icon={
-              <GraduationCap className="h-5 w-5" />
-            }
+            icon={<GraduationCap className="h-5 w-5" />}
             label="Kelas"
-            value={
-              data.summary.total_classes
-            }
+            value={data.summary.total_classes}
           />
         </div>
 
@@ -435,9 +435,7 @@ export default function TutorModulesPage() {
                 type="text"
                 value={search}
                 onChange={(event) =>
-                  setSearch(
-                    event.target.value
-                  )
+                  setSearch(event.target.value)
                 }
                 placeholder="Cari judul modul, kelas, atau mata pelajaran..."
                 className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 pl-11 pr-11 text-sm text-[#111827] outline-none transition placeholder:text-slate-400 focus:border-[#E53935] focus:bg-white focus:ring-2 focus:ring-red-100"
@@ -446,9 +444,7 @@ export default function TutorModulesPage() {
               {search && (
                 <button
                   type="button"
-                  onClick={() =>
-                    setSearch("")
-                  }
+                  onClick={() => setSearch("")}
                   className="absolute right-3 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
                   aria-label="Hapus pencarian"
                 >
@@ -461,9 +457,7 @@ export default function TutorModulesPage() {
               <select
                 value={selectedClass}
                 onChange={(event) =>
-                  setSelectedClass(
-                    event.target.value
-                  )
+                  setSelectedClass(event.target.value)
                 }
                 className="h-12 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 text-sm font-medium text-[#111827] outline-none transition focus:border-[#E53935] focus:bg-white focus:ring-2 focus:ring-red-100"
               >
@@ -471,30 +465,21 @@ export default function TutorModulesPage() {
                   Semua Kelas
                 </option>
 
-                {data.classes.map(
-                  (item) => (
-                    <option
-                      key={item.id}
-                      value={item.id}
-                    >
-                      {item.class_name}
-                    </option>
-                  )
-                )}
+                {data.classes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.class_name}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
 
-          {(search ||
-            selectedClass !==
-              "ALL") && (
+          {(search || selectedClass !== "ALL") && (
             <div className="mt-3 flex items-center justify-between border-t border-slate-100 pt-3">
               <p className="text-xs text-slate-500">
                 Menampilkan{" "}
                 <span className="font-semibold text-[#111827]">
-                  {
-                    filteredModules.length
-                  }
+                  {filteredModules.length}
                 </span>{" "}
                 modul
               </p>
@@ -503,9 +488,7 @@ export default function TutorModulesPage() {
                 type="button"
                 onClick={() => {
                   setSearch("")
-                  setSelectedClass(
-                    "ALL"
-                  )
+                  setSelectedClass("ALL")
                 }}
                 className="text-xs font-semibold text-[#E53935] hover:underline"
               >
@@ -533,36 +516,29 @@ export default function TutorModulesPage() {
             </span>
           </div>
 
-          {filteredModules.length ===
-          0 ? (
+          {filteredModules.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
               <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100">
                 <BookOpen className="h-6 w-6 text-slate-400" />
               </div>
 
               <h3 className="mt-4 font-semibold text-[#111827]">
-                {data.modules.length ===
-                0
+                {data.modules.length === 0
                   ? "Belum ada modul"
                   : "Modul tidak ditemukan"}
               </h3>
 
               <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">
-                {data.modules.length ===
-                0
+                {data.modules.length === 0
                   ? "Tambahkan modul belajar untuk mulai menyediakan materi kepada siswa."
                   : "Coba gunakan kata pencarian yang berbeda atau ubah filter kelas."}
               </p>
 
-              {data.modules.length ===
-                0 &&
-                data.classes.length >
-                  0 && (
+              {data.modules.length === 0 &&
+                data.classes.length > 0 && (
                   <button
                     type="button"
-                    onClick={
-                      openCreateModal
-                    }
+                    onClick={openCreateModal}
                     className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#E53935] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#D32F2F]"
                   >
                     <Plus className="h-4 w-4" />
@@ -572,88 +548,75 @@ export default function TutorModulesPage() {
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {filteredModules.map(
-                (module) => (
-                  <Link
-                    key={module.id}
-                    href={`/dashboard/tutor/modules/${module.id}`}
-                    className="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
-                  >
-                    <div className="p-5">
-                      <div className="flex items-start gap-4">
-                        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#111827] text-white">
-                          <FileText className="h-6 w-6" />
-                        </div>
+              {filteredModules.map((module) => (
+                <Link
+                  key={module.id}
+                  href={`/dashboard/tutor/modules/${module.id}`}
+                  className="group overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+                >
+                  <div className="p-5">
+                    <div className="flex items-start gap-4">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#111827] text-white">
+                        <FileText className="h-6 w-6" />
+                      </div>
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <h3 className="font-bold text-[#111827] group-hover:text-[#E53935]">
-                                {module.title}
-                              </h3>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <h3 className="font-bold text-[#111827] group-hover:text-[#E53935]">
+                              {module.title}
+                            </h3>
 
-                              <div className="mt-1 flex flex-wrap items-center gap-2">
-                                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
-                                  {
-                                    module
-                                      .class
-                                      .class_name
-                                  }
-                                </span>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
+                                {module.class.class_name}
+                              </span>
 
-                                <span className="text-xs text-slate-400">
-                                  {
-                                    module
-                                      .class
-                                      .subject
-                                  }
-                                </span>
-                              </div>
+                              <span className="text-xs text-slate-400">
+                                {module.class.subject}
+                              </span>
                             </div>
-
-                            <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-slate-300 transition group-hover:translate-x-1 group-hover:text-[#E53935]" />
                           </div>
 
-                          {module.description && (
-                            <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-500">
-                              {
-                                module.description
-                              }
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
-                        <div className="flex items-center gap-2 text-xs text-slate-400">
-                          {module.file_url ? (
-                            <>
-                              <Link2 className="h-4 w-4" />
-                              Ada materi
-                            </>
-                          ) : (
-                            <>
-                              <FileText className="h-4 w-4" />
-                              Tanpa file
-                            </>
-                          )}
+                          <ChevronRight className="mt-1 h-5 w-5 shrink-0 text-slate-300 transition group-hover:translate-x-1 group-hover:text-[#E53935]" />
                         </div>
 
-                        <span className="text-xs font-semibold text-[#E53935]">
-                          Lihat detail
-                        </span>
+                        {module.description && (
+                          <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-500">
+                            {module.description}
+                          </p>
+                        )}
                       </div>
                     </div>
-                  </Link>
-                )
-              )}
+
+                    <div className="mt-5 flex items-center justify-between border-t border-slate-100 pt-4">
+                      <div className="flex items-center gap-2 text-xs text-slate-400">
+                        {module.file_url ? (
+                          <>
+                            <Link2 className="h-4 w-4" />
+                            Ada materi
+                          </>
+                        ) : (
+                          <>
+                            <FileText className="h-4 w-4" />
+                            Tanpa file
+                          </>
+                        )}
+                      </div>
+
+                      <span className="text-xs font-semibold text-[#E53935]">
+                        Lihat detail
+                      </span>
+                    </div>
+                  </div>
+                </Link>
+              ))}
             </div>
           )}
         </section>
 
         {/* CLASS OVERVIEW */}
-        {data.classes.length >
-          0 && (
+        {data.classes.length > 0 && (
           <section className="space-y-4">
             <div>
               <h2 className="text-lg font-bold text-[#111827]">
@@ -666,50 +629,39 @@ export default function TutorModulesPage() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              {data.classes.map(
-                (classItem) => {
-                  const moduleCount =
-                    data.modules.filter(
-                      (module) =>
-                        module.class_id ===
-                        classItem.id
-                    ).length
+              {data.classes.map((classItem) => {
+                const moduleCount = data.modules.filter(
+                  (module) =>
+                    module.class_id === classItem.id
+                ).length
 
-                  return (
-                    <div
-                      key={
-                        classItem.id
-                      }
-                      className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-                    >
-                      <div className="flex items-start gap-4">
-                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[#111827]">
-                          <GraduationCap className="h-5 w-5" />
-                        </div>
+                return (
+                  <div
+                    key={classItem.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-[#111827]">
+                        <GraduationCap className="h-5 w-5" />
+                      </div>
 
-                        <div className="min-w-0 flex-1">
-                          <h3 className="font-bold text-[#111827]">
-                            {
-                              classItem.class_name
-                            }
-                          </h3>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-bold text-[#111827]">
+                          {classItem.class_name}
+                        </h3>
 
-                          <p className="mt-0.5 text-sm text-slate-500">
-                            {
-                              classItem.subject
-                            }
-                          </p>
+                        <p className="mt-0.5 text-sm text-slate-500">
+                          {classItem.subject}
+                        </p>
 
-                          <p className="mt-3 text-xs font-medium text-slate-400">
-                            {moduleCount}{" "}
-                            modul
-                          </p>
-                        </div>
+                        <p className="mt-3 text-xs font-medium text-slate-400">
+                          {moduleCount} modul
+                        </p>
                       </div>
                     </div>
-                  )
-                }
-              )}
+                  </div>
+                )
+              })}
             </div>
           </section>
         )}
@@ -732,9 +684,7 @@ export default function TutorModulesPage() {
 
               <button
                 type="button"
-                onClick={() =>
-                  setShowCreate(false)
-                }
+                onClick={() => setShowCreate(false)}
                 className="flex h-9 w-9 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
               >
                 <XCircle className="h-5 w-5" />
@@ -761,9 +711,7 @@ export default function TutorModulesPage() {
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      class_id:
-                        event.target
-                          .value,
+                      class_id: event.target.value,
                     })
                   }
                   required
@@ -773,20 +721,11 @@ export default function TutorModulesPage() {
                     Pilih kelas
                   </option>
 
-                  {data.classes.map(
-                    (item) => (
-                      <option
-                        key={item.id}
-                        value={item.id}
-                      >
-                        {
-                          item.class_name
-                        }{" "}
-                        —{" "}
-                        {item.subject}
-                      </option>
-                    )
-                  )}
+                  {data.classes.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.class_name} — {item.subject}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -801,9 +740,7 @@ export default function TutorModulesPage() {
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      title:
-                        event.target
-                          .value,
+                      title: event.target.value,
                     })
                   }
                   placeholder="Contoh: Persamaan Kuadrat"
@@ -818,15 +755,11 @@ export default function TutorModulesPage() {
                 </label>
 
                 <textarea
-                  value={
-                    form.description
-                  }
+                  value={form.description}
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      description:
-                        event.target
-                          .value,
+                      description: event.target.value,
                     })
                   }
                   placeholder="Jelaskan isi modul..."
@@ -839,21 +772,17 @@ export default function TutorModulesPage() {
                 <label className="mb-1.5 block text-sm font-semibold text-[#111827]">
                   Link Materi
                   <span className="ml-1 font-normal text-slate-400">
-                    (wajib)
+                    (opsional)
                   </span>
                 </label>
 
                 <input
                   type="url"
-                  value={
-                    form.file_url
-                  }
+                  value={form.file_url}
                   onChange={(event) =>
                     setForm({
                       ...form,
-                      file_url:
-                        event.target
-                          .value,
+                      file_url: event.target.value,
                     })
                   }
                   placeholder="https://..."
@@ -864,9 +793,7 @@ export default function TutorModulesPage() {
               <div className="flex justify-end gap-2 border-t border-slate-100 pt-4">
                 <button
                   type="button"
-                  onClick={() =>
-                    setShowCreate(false)
-                  }
+                  onClick={() => setShowCreate(false)}
                   className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
                 >
                   Batal

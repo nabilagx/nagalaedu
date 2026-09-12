@@ -4,29 +4,98 @@ import { requireFounder } from '@/lib/auth/requireFounder'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 const MAX_RESULTS = 10
+const MAX_SEARCH_LENGTH = 100
 
-export async function GET(request: NextRequest) {
-  const auth = await requireFounder()
+const CONTROL_CHAR_REGEX =
+  /[\u0000-\u001F\u007F]/
+
+function json(
+  body: unknown,
+  status = 200,
+) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      'Cache-Control': 'private, no-store',
+    },
+  })
+}
+
+function validateSearch(
+  search: string,
+) {
+  if (search.length > MAX_SEARCH_LENGTH) {
+    return 'Pencarian terlalu panjang.'
+  }
+
+  if (
+    CONTROL_CHAR_REGEX.test(search)
+  ) {
+    return 'Pencarian mengandung karakter yang tidak valid.'
+  }
+
+  return null
+}
+
+export async function GET(
+  request: NextRequest,
+) {
+  const auth =
+    await requireFounder()
 
   if (!auth.authorized) {
     return auth.response
   }
 
   try {
-    const admin = createAdminClient()
+    const admin =
+      createAdminClient()
 
-    const { searchParams } = new URL(request.url)
-    const search = searchParams.get('search')?.trim() ?? ''
+    const { searchParams } =
+      new URL(request.url)
+
+    const search =
+      searchParams
+        .get('search')
+        ?.trim() ?? ''
 
     if (search.length < 2) {
-      return NextResponse.json({
+      return json({
         students: [],
       })
     }
 
-    const keyword = `%${search}%`
+    const searchError =
+      validateSearch(search)
 
-    // Cari siswa aktif yang memiliki parent.
+    if (searchError) {
+      return json(
+        {
+          error: searchError,
+        },
+        400,
+      )
+    }
+
+    /*
+     * Escape karakter wildcard LIKE.
+     *
+     * Search user tidak boleh dapat
+     * mengubah pattern PostgREST/SQL
+     * yang kita kirim.
+     */
+    const keyword = search
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_')
+
+    const pattern =
+      `%${keyword}%`
+
+    /*
+     * Cari siswa aktif yang memiliki
+     * parent.
+     */
     const {
       data: students,
       error: studentsError,
@@ -40,9 +109,13 @@ export async function GET(request: NextRequest) {
         parent_id
       `)
       .eq('status', 'ACTIVE')
-      .not('parent_id', 'is', null)
+      .not(
+        'parent_id',
+        'is',
+        null,
+      )
       .or(
-        `student_name.ilike.${keyword},school_name.ilike.${keyword},grade_level.ilike.${keyword}`,
+        `student_name.ilike.${pattern},school_name.ilike.${pattern},grade_level.ilike.${pattern}`,
       )
       .order('student_name', {
         ascending: true,
@@ -55,27 +128,34 @@ export async function GET(request: NextRequest) {
         studentsError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal mencari siswa.',
+          error:
+            'Gagal mencari siswa.',
         },
-        { status: 500 },
+        500,
       )
     }
 
-    const studentList = students ?? []
+    const studentList =
+      students ?? []
 
-    if (studentList.length === 0) {
-      return NextResponse.json({
+    if (
+      studentList.length === 0
+    ) {
+      return json({
         students: [],
       })
     }
 
-    const studentIds = studentList.map(
-      (student) => student.id,
-    )
+    const studentIds =
+      studentList.map(
+        (student) => student.id,
+      )
 
-    // Ambil enrollment aktif siswa.
+    /*
+     * Ambil enrollment aktif.
+     */
     const {
       data: enrollments,
       error: enrollmentError,
@@ -87,8 +167,14 @@ export async function GET(request: NextRequest) {
         class_id,
         status
       `)
-      .in('student_id', studentIds)
-      .eq('status', 'ACTIVE')
+      .in(
+        'student_id',
+        studentIds,
+      )
+      .eq(
+        'status',
+        'ACTIVE',
+      )
 
     if (enrollmentError) {
       console.error(
@@ -96,20 +182,25 @@ export async function GET(request: NextRequest) {
         enrollmentError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal mengambil kelas siswa.',
+          error:
+            'Gagal mengambil kelas siswa.',
         },
-        { status: 500 },
+        500,
       )
     }
 
-    const enrollmentList = enrollments ?? []
+    const enrollmentList =
+      enrollments ?? []
 
     const classIds = [
       ...new Set(
         enrollmentList
-          .map((enrollment) => enrollment.class_id)
+          .map(
+            (enrollment) =>
+              enrollment.class_id,
+          )
           .filter(Boolean),
       ),
     ]
@@ -133,7 +224,10 @@ export async function GET(request: NextRequest) {
           subject,
           status
         `)
-        .in('id', classIds)
+        .in(
+          'id',
+          classIds,
+        )
 
       if (classError) {
         console.error(
@@ -141,44 +235,60 @@ export async function GET(request: NextRequest) {
           classError,
         )
 
-        return NextResponse.json(
+        return json(
           {
-            error: 'Gagal mengambil data kelas.',
+            error:
+              'Gagal mengambil data kelas.',
           },
-          { status: 500 },
+          500,
         )
       }
 
-      classes = classData ?? []
+      classes =
+        classData ?? []
     }
 
-    const classMap = new Map(
-      classes.map((item) => [item.id, item]),
-    )
-
-    const classesByStudent = new Map<
-      string,
-      Array<{
-        id: string
-        class_name: string
-        subject: string
-        status: string
-      }>
-    >()
-
-    for (const enrollment of enrollmentList) {
-      const classData = classMap.get(
-        enrollment.class_id,
+    const classMap =
+      new Map(
+        classes.map(
+          (item) => [
+            item.id,
+            item,
+          ],
+        ),
       )
 
-      if (!classData) continue
+    const classesByStudent =
+      new Map<
+        string,
+        Array<{
+          id: string
+          class_name: string
+          subject: string
+          status: string
+        }>
+      >()
+
+    for (
+      const enrollment of enrollmentList
+    ) {
+      const classData =
+        classMap.get(
+          enrollment.class_id,
+        )
+
+      if (!classData) {
+        continue
+      }
 
       const existing =
         classesByStudent.get(
           enrollment.student_id,
         ) ?? []
 
-      existing.push(classData)
+      existing.push(
+        classData,
+      )
 
       classesByStudent.set(
         enrollment.student_id,
@@ -186,26 +296,60 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Ambil bulan berjalan.
+    /*
+     * Gunakan bulan Jakarta,
+     * bukan timezone server.
+     */
     const now = new Date()
 
-    const currentMonthStart = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        1,
-      ),
+    const jakartaParts =
+      new Intl.DateTimeFormat(
+        'en-US',
+        {
+          timeZone:
+            'Asia/Jakarta',
+          year: 'numeric',
+          month: '2-digit',
+        },
+      ).formatToParts(now)
+
+    const year = Number(
+      jakartaParts.find(
+        (part) =>
+          part.type ===
+          'year',
+      )?.value,
     )
 
-    const nextMonthStart = new Date(
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth() + 1,
-        1,
-      ),
+    const month = Number(
+      jakartaParts.find(
+        (part) =>
+          part.type ===
+          'month',
+      )?.value,
     )
 
-    // Cek tagihan bulan berjalan.
+    const currentMonthStart =
+      new Date(
+        Date.UTC(
+          year,
+          month - 1,
+          1,
+        ),
+      )
+
+    const nextMonthStart =
+      new Date(
+        Date.UTC(
+          year,
+          month,
+          1,
+        ),
+      )
+
+    /*
+     * Cek tagihan bulan berjalan.
+     */
     const {
       data: existingBills,
       error: billsError,
@@ -217,7 +361,10 @@ export async function GET(request: NextRequest) {
         payment_status,
         amount
       `)
-      .in('student_id', studentIds)
+      .in(
+        'student_id',
+        studentIds,
+      )
       .gte(
         'month_period',
         currentMonthStart.toISOString(),
@@ -233,44 +380,64 @@ export async function GET(request: NextRequest) {
         billsError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal memeriksa tagihan siswa.',
+          error:
+            'Gagal memeriksa tagihan siswa.',
         },
-        { status: 500 },
+        500,
       )
     }
 
-    const billMap = new Map(
-      (existingBills ?? []).map((bill) => [
-        bill.student_id,
-        bill,
-      ]),
-    )
+    const billMap =
+      new Map(
+        (existingBills ?? []).map(
+          (bill) => [
+            bill.student_id,
+            bill,
+          ],
+        ),
+      )
 
-    const result = studentList.map((student) => {
-      const bill = billMap.get(student.id)
+    const result =
+      studentList.map(
+        (student) => {
+          const bill =
+            billMap.get(
+              student.id,
+            )
 
-      return {
-        id: student.id,
-        student_name: student.student_name,
-        grade_level: student.grade_level,
-        school_name: student.school_name,
-        parent_id: student.parent_id,
-        classes:
-          classesByStudent.get(student.id) ?? [],
-        current_month_bill: bill
-          ? {
-              id: bill.id,
-              payment_status:
-                bill.payment_status,
-              amount: Number(bill.amount),
-            }
-          : null,
-      }
-    })
+          return {
+            id: student.id,
+            student_name:
+              student.student_name,
+            grade_level:
+              student.grade_level,
+            school_name:
+              student.school_name,
+            parent_id:
+              student.parent_id,
+            classes:
+              classesByStudent.get(
+                student.id,
+              ) ?? [],
+            current_month_bill:
+              bill
+                ? {
+                    id: bill.id,
+                    payment_status:
+                      bill.payment_status,
+                    amount:
+                      Number(
+                        bill.amount,
+                      ),
+                  }
+                : null,
+          }
+        },
+      )
 
-    return NextResponse.json({
+    return json({
       students: result,
     })
   } catch (error) {
@@ -279,11 +446,12 @@ export async function GET(request: NextRequest) {
       error,
     )
 
-    return NextResponse.json(
+    return json(
       {
-        error: 'Terjadi kesalahan saat mencari siswa.',
+        error:
+          'Terjadi kesalahan saat mencari siswa.',
       },
-      { status: 500 },
+      500,
     )
   }
 }

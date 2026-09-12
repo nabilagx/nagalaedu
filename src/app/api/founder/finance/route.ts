@@ -6,29 +6,82 @@ import { createAdminClient } from '@/lib/supabase/admin'
 const MIN_BILL_AMOUNT = 1_000
 const MAX_BILL_AMOUNT = 1_000_000
 
-function getCurrentMonthStart() {
-  const now = new Date()
+const MAX_SEARCH_LENGTH = 100
+const MAX_BILLS = 1000
 
-  return new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth(),
-      1,
-    ),
+const PAYMENT_STATUSES = [
+  'PENDING',
+  'PAID',
+  'EXPIRED',
+  'CANCELLED',
+] as const
+
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+const MONTH_REGEX = /^(\d{4})-(0[1-9]|1[0-2])$/
+
+const CONTROL_CHAR_REGEX = /[\u0000-\u001F\u007F]/
+
+function json(
+  body: unknown,
+  status = 200,
+) {
+  return NextResponse.json(body, {
+    status,
+    headers: {
+      'Cache-Control': 'private, no-store',
+    },
+  })
+}
+
+function isPlainObject(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value)
   )
 }
 
+function isValidUUID(value: string) {
+  return UUID_REGEX.test(value)
+}
+
+function getCurrentMonthStart() {
+  const now = new Date()
+
+  const jakartaParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(now)
+
+  const year = Number(
+    jakartaParts.find((part) => part.type === 'year')?.value,
+  )
+
+  const month = Number(
+    jakartaParts.find((part) => part.type === 'month')?.value,
+  )
+
+  return new Date(Date.UTC(year, month - 1, 1))
+}
+
 function normalizeMonthPeriod(value: unknown) {
-  if (typeof value !== 'string') return null
+  if (typeof value !== 'string') {
+    return null
+  }
 
-  const match = /^(\d{4})-(\d{2})$/.exec(value)
+  const match = MONTH_REGEX.exec(value)
 
-  if (!match) return null
+  if (!match) {
+    return null
+  }
 
   const year = Number(match[1])
   const month = Number(match[2])
-
-  if (month < 1 || month > 12) return null
 
   return new Date(Date.UTC(year, month - 1, 1))
 }
@@ -43,178 +96,40 @@ function isCurrentMonth(date: Date) {
 }
 
 function generateOrderId() {
-  const timestamp = Date.now()
-  const random = Math.random()
-    .toString(36)
-    .substring(2, 8)
-    .toUpperCase()
-
-  return `NGL-SPP-${timestamp}-${random}`
+  return `NGL-SPP-${Date.now()}-${crypto
+    .randomUUID()
+    .replace(/-/g, '')
+    .slice(0, 12)
+    .toUpperCase()}`
 }
 
-// GET
-export async function GET(request: NextRequest) {
-  const auth = await requireFounder()
-
-  if (!auth.authorized) {
-    return auth.response
+function validateSearch(value: string) {
+  if (value.length > MAX_SEARCH_LENGTH) {
+    return 'Pencarian terlalu panjang.'
   }
 
-  const admin = createAdminClient()
-
-  const { searchParams } = new URL(request.url)
-
-  const search = searchParams.get('search')?.trim() ?? ''
-  const status = searchParams.get('status')?.trim() ?? ''
-  const month = searchParams.get('month')?.trim() ?? ''
-
-  let billQuery = admin
-    .from('spp_bills')
-    .select(`
-      id,
-      student_id,
-      order_id,
-      month_period,
-      amount,
-      payment_status,
-      snap_token,
-      paid_at,
-      created_at
-    `)
-    .order('month_period', { ascending: false })
-    .order('created_at', { ascending: false })
-
-  if (status) {
-    billQuery = billQuery.eq('payment_status', status)
+  if (CONTROL_CHAR_REGEX.test(value)) {
+    return 'Pencarian mengandung karakter yang tidak valid.'
   }
 
-  if (month) {
-    const monthDate = normalizeMonthPeriod(month)
-
-    if (monthDate) {
-      const nextMonth = new Date(monthDate)
-      nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1)
-
-      billQuery = billQuery
-        .gte('month_period', monthDate.toISOString())
-        .lt('month_period', nextMonth.toISOString())
-    }
-  }
-
-  const { data: bills, error: billsError } = await billQuery
-
-  if (billsError) {
-    console.error('GET FINANCE BILLS ERROR:', billsError)
-
-    return NextResponse.json(
-      {
-        error: 'Gagal mengambil data tagihan.',
-      },
-      { status: 500 },
-    )
-  }
-
-  const studentIds = [
-    ...new Set(
-      (bills ?? [])
-        .map((bill) => bill.student_id)
-        .filter(Boolean),
-    ),
-  ]
-
-  let students: Array<{
-    id: string
-    student_name: string
-    grade_level: string | null
-    school_name: string | null
-    parent_id: string | null
-  }> = []
-
-  if (studentIds.length > 0) {
-    const { data, error } = await admin
-      .from('students')
-      .select(`
-        id,
-        student_name,
-        grade_level,
-        school_name,
-        parent_id
-      `)
-      .in('id', studentIds)
-
-    if (error) {
-      console.error('GET FINANCE STUDENTS ERROR:', error)
-
-      return NextResponse.json(
-        {
-          error: 'Gagal mengambil data siswa.',
-        },
-        { status: 500 },
-      )
-    }
-
-    students = data ?? []
-  }
-
-  const studentMap = new Map(
-    students.map((student) => [student.id, student]),
-  )
-
-  let filteredBills = (bills ?? []).map((bill) => ({
-    ...bill,
-    student: studentMap.get(bill.student_id) ?? null,
-  }))
-
-  if (search) {
-    const keyword = search.toLowerCase()
-
-    filteredBills = filteredBills.filter((bill) => {
-      const studentName =
-        bill.student?.student_name?.toLowerCase() ?? ''
-
-      const orderId =
-        bill.order_id?.toLowerCase() ?? ''
-
-      return (
-        studentName.includes(keyword) ||
-        orderId.includes(keyword)
-      )
-    })
-  }
-
-  const totalBills = filteredBills.length
-
-  const paidBills = filteredBills.filter(
-    (bill) => bill.payment_status === 'PAID',
-  )
-
-  const pendingBills = filteredBills.filter(
-    (bill) => bill.payment_status === 'PENDING',
-  )
-
-  const unpaidAmount = filteredBills
-    .filter((bill) => bill.payment_status !== 'PAID')
-    .reduce((total, bill) => total + Number(bill.amount), 0)
-
-  const paidAmount = paidBills.reduce(
-    (total, bill) => total + Number(bill.amount),
-    0,
-  )
-
-  return NextResponse.json({
-    summary: {
-      totalBills,
-      paidBills: paidBills.length,
-      pendingBills: pendingBills.length,
-      paidAmount,
-      unpaidAmount,
-    },
-    bills: filteredBills,
-  })
+  return null
 }
 
-// POST
-export async function POST(request: NextRequest) {
+function isPaymentStatus(
+  value: string,
+): value is (typeof PAYMENT_STATUSES)[number] {
+  return PAYMENT_STATUSES.includes(
+    value as (typeof PAYMENT_STATUSES)[number],
+  )
+}
+
+/* =========================================================
+   GET
+========================================================= */
+
+export async function GET(
+  request: NextRequest,
+) {
   const auth = await requireFounder()
 
   if (!auth.authorized) {
@@ -222,83 +137,391 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const body = await request.json()
+    const admin = createAdminClient()
+
+    const { searchParams } = new URL(request.url)
+
+    const search =
+      searchParams.get('search')?.trim() ?? ''
+
+    const status =
+      searchParams.get('status')?.trim() ?? ''
+
+    const month =
+      searchParams.get('month')?.trim() ?? ''
+
+    const searchError = validateSearch(search)
+
+    if (searchError) {
+      return json(
+        {
+          error: searchError,
+        },
+        400,
+      )
+    }
+
+    if (
+      status &&
+      !isPaymentStatus(status)
+    ) {
+      return json(
+        {
+          error: 'Status pembayaran tidak valid.',
+        },
+        400,
+      )
+    }
+
+    let monthDate: Date | null = null
+
+    if (month) {
+      monthDate = normalizeMonthPeriod(month)
+
+      if (!monthDate) {
+        return json(
+          {
+            error: 'Format bulan tidak valid.',
+          },
+          400,
+        )
+      }
+    }
+
+    let billQuery = admin
+      .from('spp_bills')
+      .select(`
+        id,
+        student_id,
+        order_id,
+        month_period,
+        amount,
+        payment_status,
+        snap_token,
+        paid_at,
+        created_at
+      `)
+      .order('month_period', {
+        ascending: false,
+      })
+      .order('created_at', {
+        ascending: false,
+      })
+      .limit(MAX_BILLS)
+
+    if (status) {
+      billQuery = billQuery.eq(
+        'payment_status',
+        status,
+      )
+    }
+
+    if (monthDate) {
+      const nextMonth = new Date(monthDate)
+
+      nextMonth.setUTCMonth(
+        nextMonth.getUTCMonth() + 1,
+      )
+
+      billQuery = billQuery
+        .gte(
+          'month_period',
+          monthDate.toISOString(),
+        )
+        .lt(
+          'month_period',
+          nextMonth.toISOString(),
+        )
+    }
+
+    const {
+      data: bills,
+      error: billsError,
+    } = await billQuery
+
+    if (billsError) {
+      console.error(
+        'GET FINANCE BILLS ERROR:',
+        billsError,
+      )
+
+      return json(
+        {
+          error: 'Gagal mengambil data tagihan.',
+        },
+        500,
+      )
+    }
+
+    const studentIds = [
+      ...new Set(
+        (bills ?? [])
+          .map((bill) => bill.student_id)
+          .filter(
+            (id): id is string =>
+              typeof id === 'string' &&
+              isValidUUID(id),
+          ),
+      ),
+    ]
+
+    let students: Array<{
+      id: string
+      student_name: string
+      grade_level: string | null
+      school_name: string | null
+      parent_id: string | null
+    }> = []
+
+    if (studentIds.length > 0) {
+      const {
+        data,
+        error,
+      } = await admin
+        .from('students')
+        .select(`
+          id,
+          student_name,
+          grade_level,
+          school_name,
+          parent_id
+        `)
+        .in('id', studentIds)
+
+      if (error) {
+        console.error(
+          'GET FINANCE STUDENTS ERROR:',
+          error,
+        )
+
+        return json(
+          {
+            error: 'Gagal mengambil data siswa.',
+          },
+          500,
+        )
+      }
+
+      students = data ?? []
+    }
+
+    const studentMap = new Map(
+      students.map((student) => [
+        student.id,
+        student,
+      ]),
+    )
+
+    let filteredBills = (bills ?? []).map(
+      (bill) => ({
+        ...bill,
+        student:
+          studentMap.get(
+            bill.student_id,
+          ) ?? null,
+      }),
+    )
+
+    /*
+     * Search dilakukan setelah data student
+     * dipetakan agar input user tidak masuk
+     * langsung ke expression PostgREST.
+     */
+    if (search) {
+      const keyword =
+        search.toLocaleLowerCase('id-ID')
+
+      filteredBills =
+        filteredBills.filter((bill) => {
+          const studentName =
+            bill.student?.student_name
+              ?.toLocaleLowerCase('id-ID') ??
+            ''
+
+          const orderId =
+            bill.order_id
+              ?.toLocaleLowerCase('id-ID') ??
+            ''
+
+          return (
+            studentName.includes(keyword) ||
+            orderId.includes(keyword)
+          )
+        })
+    }
+
+    const totalBills =
+      filteredBills.length
+
+    const paidBills =
+      filteredBills.filter(
+        (bill) =>
+          bill.payment_status === 'PAID',
+      )
+
+    const pendingBills =
+      filteredBills.filter(
+        (bill) =>
+          bill.payment_status === 'PENDING',
+      )
+
+    const unpaidAmount =
+      filteredBills
+        .filter(
+          (bill) =>
+            bill.payment_status !== 'PAID',
+        )
+        .reduce(
+          (total, bill) =>
+            total + Number(bill.amount),
+          0,
+        )
+
+    const paidAmount =
+      paidBills.reduce(
+        (total, bill) =>
+          total + Number(bill.amount),
+        0,
+      )
+
+    return json({
+      summary: {
+        totalBills,
+        paidBills: paidBills.length,
+        pendingBills: pendingBills.length,
+        paidAmount,
+        unpaidAmount,
+      },
+      bills: filteredBills,
+    })
+  } catch (error) {
+    console.error(
+      'GET FINANCE ERROR:',
+      error,
+    )
+
+    return json(
+      {
+        error: 'Terjadi kesalahan pada server.',
+      },
+      500,
+    )
+  }
+}
+
+/* =========================================================
+   POST
+========================================================= */
+
+export async function POST(
+  request: NextRequest,
+) {
+  const auth = await requireFounder()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
+  try {
+    const body: unknown =
+      await request.json()
+
+    if (!isPlainObject(body)) {
+      return json(
+        {
+          error: 'Format data tidak valid.',
+        },
+        400,
+      )
+    }
 
     const studentId =
       typeof body.studentId === 'string'
         ? body.studentId.trim()
         : ''
 
-    const amount = Number(body.amount)
+    const rawAmount = body.amount
 
     const monthPeriod =
-      normalizeMonthPeriod(body.monthPeriod)
+      normalizeMonthPeriod(
+        body.monthPeriod,
+      )
 
-    if (!studentId) {
-      return NextResponse.json(
+    if (
+      !studentId ||
+      !isValidUUID(studentId)
+    ) {
+      return json(
         {
-          error: 'Siswa wajib dipilih.',
+          error: 'Siswa tidak valid.',
         },
-        { status: 400 },
+        400,
       )
     }
 
-    if (!Number.isFinite(amount)) {
-      return NextResponse.json(
+    /*
+     * Jangan menerima string angka.
+     * Frontend memang mengirim number.
+     */
+    if (
+      typeof rawAmount !== 'number' ||
+      !Number.isSafeInteger(rawAmount)
+    ) {
+      return json(
         {
-          error: 'Nominal tagihan tidak valid.',
+          error:
+            'Nominal tagihan harus berupa angka bulat.',
         },
-        { status: 400 },
+        400,
       )
     }
 
-    if (!Number.isInteger(amount)) {
-      return NextResponse.json(
-        {
-          error: 'Nominal tagihan harus berupa angka bulat.',
-        },
-        { status: 400 },
-      )
-    }
+    const amount = rawAmount
 
     if (amount < MIN_BILL_AMOUNT) {
-      return NextResponse.json(
+      return json(
         {
-          error: `Nominal minimal Rp${MIN_BILL_AMOUNT.toLocaleString('id-ID')}.`,
+          error: `Nominal minimal Rp${MIN_BILL_AMOUNT.toLocaleString(
+            'id-ID',
+          )}.`,
         },
-        { status: 400 },
+        400,
       )
     }
 
     if (amount > MAX_BILL_AMOUNT) {
-      return NextResponse.json(
+      return json(
         {
-          error: `Nominal maksimal Rp${MAX_BILL_AMOUNT.toLocaleString('id-ID')} per tagihan.`,
+          error: `Nominal maksimal Rp${MAX_BILL_AMOUNT.toLocaleString(
+            'id-ID',
+          )} per tagihan.`,
         },
-        { status: 400 },
+        400,
       )
     }
 
     if (!monthPeriod) {
-      return NextResponse.json(
+      return json(
         {
-          error: 'Periode tagihan tidak valid.',
+          error:
+            'Periode tagihan tidak valid.',
         },
-        { status: 400 },
+        400,
       )
     }
 
     if (!isCurrentMonth(monthPeriod)) {
-      return NextResponse.json(
+      return json(
         {
           error:
             'Tagihan hanya dapat dibuat untuk bulan berjalan.',
         },
-        { status: 400 },
+        400,
       )
     }
 
-    const admin = createAdminClient()
+    const admin =
+      createAdminClient()
 
     const {
       data: student,
@@ -319,33 +542,36 @@ export async function POST(request: NextRequest) {
         studentError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal memverifikasi siswa.',
+          error:
+            'Gagal memverifikasi siswa.',
         },
-        { status: 500 },
+        500,
       )
     }
 
     if (!student) {
-      return NextResponse.json(
+      return json(
         {
           error: 'Siswa tidak ditemukan.',
         },
-        { status: 404 },
+        404,
       )
     }
 
     if (student.status !== 'ACTIVE') {
-      return NextResponse.json(
+      return json(
         {
-          error: 'Tagihan hanya dapat dibuat untuk siswa aktif.',
+          error:
+            'Tagihan hanya dapat dibuat untuk siswa aktif.',
         },
-        { status: 400 },
+        400,
       )
     }
 
-    const monthStart = monthPeriod.toISOString()
+    const monthStart =
+      monthPeriod.toISOString()
 
     const {
       data: existingBill,
@@ -367,28 +593,33 @@ export async function POST(request: NextRequest) {
         existingBillError,
       )
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal memeriksa tagihan sebelumnya.',
+          error:
+            'Gagal memeriksa tagihan sebelumnya.',
         },
-        { status: 500 },
+        500,
       )
     }
 
     if (existingBill) {
-      return NextResponse.json(
+      return json(
         {
           error:
             'Tagihan untuk siswa tersebut pada bulan berjalan sudah ada.',
           bill: existingBill,
         },
-        { status: 409 },
+        409,
       )
     }
 
-    const orderId = generateOrderId()
+    const orderId =
+      generateOrderId()
 
-    const { data: bill, error: insertError } = await admin
+    const {
+      data: bill,
+      error: insertError,
+    } = await admin
       .from('spp_bills')
       .insert({
         student_id: studentId,
@@ -414,39 +645,47 @@ export async function POST(request: NextRequest) {
         insertError,
       )
 
-      if (insertError.code === '23505') {
-        return NextResponse.json(
+      if (
+        insertError.code === '23505'
+      ) {
+        return json(
           {
             error:
               'Tagihan untuk siswa tersebut pada bulan berjalan sudah ada.',
           },
-          { status: 409 },
+          409,
         )
       }
 
-      return NextResponse.json(
+      return json(
         {
-          error: 'Gagal membuat tagihan.',
+          error:
+            'Gagal membuat tagihan.',
         },
-        { status: 500 },
+        500,
       )
     }
 
-    return NextResponse.json(
+    return json(
       {
-        message: 'Tagihan berhasil dibuat.',
+        message:
+          'Tagihan berhasil dibuat.',
         bill,
       },
-      { status: 201 },
+      201,
     )
   } catch (error) {
-    console.error('POST FINANCE ERROR:', error)
+    console.error(
+      'POST FINANCE ERROR:',
+      error,
+    )
 
-    return NextResponse.json(
+    return json(
       {
-        error: 'Format data tidak valid.',
+        error:
+          'Format data tidak valid.',
       },
-      { status: 400 },
+      400,
     )
   }
 }
