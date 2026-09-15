@@ -118,6 +118,15 @@ export default function FounderUsersPage() {
   const [deletingId, setDeletingId] =
     useState<string | null>(null)
 
+  /*
+   * User yang sedang dipilih untuk dihapus.
+   *
+   * Jika nilainya null → modal konfirmasi tidak tampil.
+   * Jika berisi User → modal konfirmasi tampil.
+   */
+  const [deleteTarget, setDeleteTarget] =
+    useState<User | null>(null)
+
   const [searchQuery, setSearchQuery] =
     useState('')
 
@@ -265,7 +274,7 @@ export default function FounderUsersPage() {
 
   /*
    * ============================================================
-   * MODAL
+   * MODAL CREATE / EDIT
    * ============================================================
    */
 
@@ -412,7 +421,7 @@ export default function FounderUsersPage() {
    * ============================================================
    */
 
-  async function handleDelete(user: User) {
+  function handleDelete(user: User) {
     /*
      * Founder tidak boleh dihapus.
      */
@@ -424,19 +433,29 @@ export default function FounderUsersPage() {
       return
     }
 
-    const confirmed =
-      window.confirm(
-        `Hapus akun ${user.full_name} secara permanen?\n\nTindakan ini tidak dapat dibatalkan.`,
-      )
+    /*
+     * Jangan langsung menghapus.
+     * Simpan user sebagai target sehingga
+     * custom confirmation modal dapat ditampilkan.
+     */
+    setDeleteTarget(user)
+  }
 
-    if (!confirmed) return
+  /*
+   * ============================================================
+   * CONFIRM DELETE
+   * ============================================================
+   */
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
 
     try {
-      setDeletingId(user.id)
+      setDeletingId(deleteTarget.id)
 
       const response =
         await fetch(
-          `/api/founder/users/${user.id}`,
+          `/api/founder/users/${deleteTarget.id}`,
           {
             method: 'DELETE',
           },
@@ -451,6 +470,12 @@ export default function FounderUsersPage() {
             'Gagal menghapus pengguna.',
         )
       }
+
+      /*
+       * Tutup confirmation modal
+       * setelah delete berhasil.
+       */
+      setDeleteTarget(null)
 
       showToast(
         'success',
@@ -468,6 +493,22 @@ export default function FounderUsersPage() {
     } finally {
       setDeletingId(null)
     }
+  }
+
+  /*
+   * ============================================================
+   * CANCEL DELETE
+   * ============================================================
+   */
+
+  function cancelDelete() {
+    /*
+     * Jika sedang proses delete,
+     * jangan tutup modal.
+     */
+    if (deletingId) return
+
+    setDeleteTarget(null)
   }
 
   /*
@@ -1123,7 +1164,7 @@ export default function FounderUsersPage() {
       </main>
 
       {/* ========================================================
-          MODAL
+          CREATE / EDIT MODAL
       ======================================================== */}
 
       {modalOpen && (
@@ -1226,13 +1267,22 @@ export default function FounderUsersPage() {
                   maxLength={13}
                   value={form.phoneNumber}
                   onChange={(event) => {
-                    const value = event.target.value.replace(/\D/g, '')
+                    const value =
+                      event.target.value.replace(
+                        /\D/g,
+                        '',
+                      )
 
-                    if (value.length <= 13) {
-                      setForm((current) => ({
-                        ...current,
-                        phoneNumber: value,
-                      }))
+                    if (
+                      value.length <= 13
+                    ) {
+                      setForm(
+                        (current) => ({
+                          ...current,
+                          phoneNumber:
+                            value,
+                        }),
+                      )
                     }
                   }}
                   placeholder="08xxxxxxxxxx"
@@ -1400,7 +1450,104 @@ export default function FounderUsersPage() {
           </div>
         </div>
       )}
+
+      {/* ========================================================
+          DELETE CONFIRMATION MODAL
+      ======================================================== */}
+
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-user-title"
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+            {/* ICON */}
+            <div className="flex justify-center px-6 pt-7">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-red-50 text-red-600">
+                <Trash2 size={25} />
+              </div>
+            </div>
+
+            {/* CONTENT */}
+            <div className="px-6 pb-6 pt-4 text-center">
+              <h2
+                id="delete-user-title"
+                className="text-lg font-bold text-slate-900"
+              >
+                Hapus Pengguna?
+              </h2>
+
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                Yakin ingin menghapus akun{' '}
+                <span className="font-semibold text-slate-700">
+                  {deleteTarget.full_name}
+                </span>{' '}
+                secara permanen?
+              </p>
+
+              {/* WARNING */}
+              <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-left">
+                <div className="flex items-start gap-3">
+                  <AlertCircle
+                    size={18}
+                    className="mt-0.5 shrink-0 text-red-500"
+                  />
+
+                  <p className="text-xs leading-5 text-red-700">
+                    Tindakan ini tidak dapat
+                    dibatalkan. Seluruh akses
+                    akun pengguna akan dihapus
+                    secara permanen.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* ACTION */}
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={
+                  deletingId ===
+                  deleteTarget.id
+                }
+                onClick={cancelDelete}
+                className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Batal
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  deletingId ===
+                  deleteTarget.id
+                }
+                onClick={confirmDelete}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-red-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {deletingId ===
+                deleteTarget.id ? (
+                  <>
+                    <Loader2
+                      size={16}
+                      className="animate-spin"
+                    />
+                    Menghapus...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={16} />
+                    Hapus Pengguna
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
-
