@@ -40,7 +40,9 @@ function isValidPhone(phone: unknown): phone is string {
   )
 }
 
-function isValidFullName(fullName: unknown): fullName is string {
+function isValidFullName(
+  fullName: unknown
+): fullName is string {
   if (typeof fullName !== "string") {
     return false
   }
@@ -54,12 +56,28 @@ function isValidFullName(fullName: unknown): fullName is string {
   )
 }
 
-function isValidPassword(password: unknown): password is string {
+function isValidPassword(
+  password: unknown
+): password is string {
   return (
     typeof password === "string" &&
     password.length >= 6 &&
     password.length <= 128
   )
+}
+
+function getDatabaseErrorCode(error: unknown) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error
+  ) {
+    return String(
+      (error as { code?: unknown }).code ?? ""
+    )
+  }
+
+  return ""
 }
 
 async function requireFounder(): Promise<FounderAuthResult> {
@@ -83,7 +101,10 @@ async function requireFounder(): Promise<FounderAuthResult> {
     }
   }
 
-  const { data: profile, error } = await supabase
+  const {
+    data: profile,
+    error,
+  } = await supabase
     .from("profiles")
     .select("id, role_id")
     .eq("id", user.id)
@@ -94,7 +115,8 @@ async function requireFounder(): Promise<FounderAuthResult> {
       authorized: false,
       response: NextResponse.json(
         {
-          error: "Profil pengguna tidak ditemukan.",
+          error:
+            "Profil pengguna tidak ditemukan.",
         },
         {
           status: 403,
@@ -126,7 +148,14 @@ async function requireFounder(): Promise<FounderAuthResult> {
 
 /**
  * PATCH
+ *
  * Mengedit data pengguna.
+ *
+ * Founder:
+ * - dapat mengedit Tutor / Parent
+ * - tidak dapat mengedit Founder
+ * - nomor HP harus unik
+ * - role hanya Tutor / Parent
  */
 export async function PATCH(
   request: Request,
@@ -143,9 +172,10 @@ export async function PATCH(
 
     const { id } = await context.params
 
-    /**
-     * Validasi UUID.
-     */
+    // =========================================================
+    // VALIDASI UUID
+    // =========================================================
+
     if (!isValidUuid(id)) {
       return NextResponse.json(
         {
@@ -157,17 +187,20 @@ export async function PATCH(
       )
     }
 
-    /**
-     * Founder tidak boleh mengedit akun Founder.
-     */
     const admin = createAdminClient()
+
+    // =========================================================
+    // AMBIL TARGET USER
+    // =========================================================
 
     const {
       data: targetProfile,
       error: targetProfileError,
     } = await admin
       .from("profiles")
-      .select("id, full_name, phone_number, role_id")
+      .select(
+        "id, full_name, phone_number, role_id"
+      )
       .eq("id", id)
       .single()
 
@@ -177,13 +210,18 @@ export async function PATCH(
     ) {
       return NextResponse.json(
         {
-          error: "Pengguna tidak ditemukan.",
+          error:
+            "Pengguna tidak ditemukan.",
         },
         {
           status: 404,
         }
       )
     }
+
+    // =========================================================
+    // FOUNDER TIDAK BOLEH DIEDIT
+    // =========================================================
 
     if (targetProfile.role_id === 1) {
       return NextResponse.json(
@@ -197,6 +235,10 @@ export async function PATCH(
       )
     }
 
+    // =========================================================
+    // PARSE BODY
+    // =========================================================
+
     let body: unknown
 
     try {
@@ -204,7 +246,8 @@ export async function PATCH(
     } catch {
       return NextResponse.json(
         {
-          error: "Format request JSON tidak valid.",
+          error:
+            "Format request JSON tidak valid.",
         },
         {
           status: 400,
@@ -219,7 +262,8 @@ export async function PATCH(
     ) {
       return NextResponse.json(
         {
-          error: "Data request tidak valid.",
+          error:
+            "Data request tidak valid.",
         },
         {
           status: 400,
@@ -234,9 +278,10 @@ export async function PATCH(
       password,
     } = body as Record<string, unknown>
 
-    /**
-     * Nama lengkap
-     */
+    // =========================================================
+    // VALIDASI NAMA
+    // =========================================================
+
     if (!isValidFullName(fullName)) {
       return NextResponse.json(
         {
@@ -249,11 +294,13 @@ export async function PATCH(
       )
     }
 
-    const normalizedFullName = fullName.trim()
+    const normalizedFullName =
+      fullName.trim()
 
-    /**
-     * Nomor telepon wajib.
-     */
+    // =========================================================
+    // VALIDASI NOMOR HP
+    // =========================================================
+
     if (!isValidPhone(phoneNumber)) {
       return NextResponse.json(
         {
@@ -266,9 +313,13 @@ export async function PATCH(
       )
     }
 
-    /**
-     * Role hanya Tutor atau Parent.
-     */
+    const normalizedPhone =
+      phoneNumber.trim()
+
+    // =========================================================
+    // VALIDASI ROLE
+    // =========================================================
+
     const parsedRoleId = Number(roleId)
 
     if (![2, 3].includes(parsedRoleId)) {
@@ -283,14 +334,10 @@ export async function PATCH(
       )
     }
 
-    /**
-     * Password bersifat opsional ketika edit.
-     *
-     * Tetapi jika dikirim:
-     * - harus string
-     * - minimal 6 karakter
-     * - maksimal 128 karakter
-     */
+    // =========================================================
+    // VALIDASI PASSWORD
+    // =========================================================
+
     if (
       password !== undefined &&
       password !== null &&
@@ -309,9 +356,59 @@ export async function PATCH(
       }
     }
 
-    /**
-     * Update Authentication terlebih dahulu.
-     */
+    // =========================================================
+    // CEK NOMOR HP DUPLIKAT
+    //
+    // Cari nomor yang sama tetapi BUKAN user yang sedang diedit.
+    // =========================================================
+
+    const {
+      data: duplicatePhone,
+      error: duplicatePhoneError,
+    } = await admin
+      .from("profiles")
+      .select("id, full_name, phone_number")
+      .eq(
+        "phone_number",
+        normalizedPhone
+      )
+      .neq("id", id)
+      .limit(1)
+      .maybeSingle()
+
+    if (duplicatePhoneError) {
+      console.error(
+        "CHECK DUPLICATE PHONE ERROR:",
+        duplicatePhoneError
+      )
+
+      return NextResponse.json(
+        {
+          error:
+            "Gagal memeriksa ketersediaan nomor telepon.",
+        },
+        {
+          status: 500,
+        }
+      )
+    }
+
+    if (duplicatePhone) {
+      return NextResponse.json(
+        {
+          error:
+            "Nomor HP sudah digunakan oleh pengguna lain.",
+        },
+        {
+          status: 409,
+        }
+      )
+    }
+
+    // =========================================================
+    // UPDATE AUTHENTICATION
+    // =========================================================
+
     const authUpdate: {
       user_metadata: {
         full_name: string
@@ -319,7 +416,8 @@ export async function PATCH(
       password?: string
     } = {
       user_metadata: {
-        full_name: normalizedFullName,
+        full_name:
+          normalizedFullName,
       },
     }
 
@@ -327,15 +425,17 @@ export async function PATCH(
       typeof password === "string" &&
       password.length > 0
     ) {
-      authUpdate.password = password
+      authUpdate.password =
+        password
     }
 
     const {
       error: authError,
-    } = await admin.auth.admin.updateUserById(
-      id,
-      authUpdate
-    )
+    } =
+      await admin.auth.admin.updateUserById(
+        id,
+        authUpdate
+      )
 
     if (authError) {
       console.error(
@@ -354,18 +454,21 @@ export async function PATCH(
       )
     }
 
-    /**
-     * Setelah Authentication berhasil,
-     * update profile.
-     */
+    // =========================================================
+    // UPDATE PROFILE
+    // =========================================================
+
     const {
       error: profileError,
     } = await admin
       .from("profiles")
       .update({
-        full_name: normalizedFullName,
-        phone_number: phoneNumber,
-        role_id: parsedRoleId,
+        full_name:
+          normalizedFullName,
+        phone_number:
+          normalizedPhone,
+        role_id:
+          parsedRoleId,
       })
       .eq("id", id)
 
@@ -374,6 +477,30 @@ export async function PATCH(
         "UPDATE PROFILE ERROR:",
         profileError
       )
+
+      // -------------------------------------------------------
+      // 23505 = unique violation
+      //
+      // Ini tetap ditangani meskipun kita sudah melakukan
+      // pre-check di atas, untuk mengantisipasi race condition.
+      // -------------------------------------------------------
+
+      const code =
+        getDatabaseErrorCode(
+          profileError
+        )
+
+      if (code === "23505") {
+        return NextResponse.json(
+          {
+            error:
+              "Nomor HP sudah digunakan oleh pengguna lain.",
+          },
+          {
+            status: 409,
+          }
+        )
+      }
 
       return NextResponse.json(
         {
@@ -386,8 +513,13 @@ export async function PATCH(
       )
     }
 
+    // =========================================================
+    // SUCCESS
+    // =========================================================
+
     return NextResponse.json({
-      message: "Pengguna berhasil diperbarui.",
+      message:
+        "Pengguna berhasil diperbarui.",
     })
   } catch (error) {
     console.error(
@@ -397,7 +529,8 @@ export async function PATCH(
 
     return NextResponse.json(
       {
-        error: "Terjadi kesalahan pada server.",
+        error:
+          "Terjadi kesalahan pada server.",
       },
       {
         status: 500,
@@ -408,6 +541,7 @@ export async function PATCH(
 
 /**
  * DELETE
+ *
  * Menghapus akun pengguna secara permanen.
  */
 export async function DELETE(
@@ -425,13 +559,15 @@ export async function DELETE(
 
     const { id } = await context.params
 
-    /**
-     * Validasi UUID.
-     */
+    // =========================================================
+    // VALIDASI UUID
+    // =========================================================
+
     if (!isValidUuid(id)) {
       return NextResponse.json(
         {
-          error: "ID pengguna tidak valid.",
+          error:
+            "ID pengguna tidak valid.",
         },
         {
           status: 400,
@@ -439,9 +575,10 @@ export async function DELETE(
       )
     }
 
-    /**
-     * Founder tidak boleh menghapus dirinya sendiri.
-     */
+    // =========================================================
+    // FOUNDER TIDAK BOLEH MENGHAPUS DIRI SENDIRI
+    // =========================================================
+
     if (id === auth.user.id) {
       return NextResponse.json(
         {
@@ -456,15 +593,18 @@ export async function DELETE(
 
     const admin = createAdminClient()
 
-    /**
-     * Pastikan target memang ada.
-     */
+    // =========================================================
+    // AMBIL TARGET PROFILE
+    // =========================================================
+
     const {
       data: targetProfile,
       error: profileError,
     } = await admin
       .from("profiles")
-      .select("id, full_name, role_id")
+      .select(
+        "id, full_name, role_id"
+      )
       .eq("id", id)
       .single()
 
@@ -474,7 +614,8 @@ export async function DELETE(
     ) {
       return NextResponse.json(
         {
-          error: "Pengguna tidak ditemukan.",
+          error:
+            "Pengguna tidak ditemukan.",
         },
         {
           status: 404,
@@ -482,12 +623,10 @@ export async function DELETE(
       )
     }
 
-    /**
-     * Founder tidak boleh dihapus.
-     *
-     * Ini penting walaupun ID tersebut bukan
-     * ID Founder yang sedang login.
-     */
+    // =========================================================
+    // FOUNDER TIDAK BOLEH DIHAPUS
+    // =========================================================
+
     if (targetProfile.role_id === 1) {
       return NextResponse.json(
         {
@@ -500,9 +639,10 @@ export async function DELETE(
       )
     }
 
-    /**
-     * Hapus profile terlebih dahulu.
-     */
+    // =========================================================
+    // HAPUS PROFILE
+    // =========================================================
+
     const {
       error: deleteProfileError,
     } = await admin
@@ -527,12 +667,16 @@ export async function DELETE(
       )
     }
 
-    /**
-     * Hapus Authentication.
-     */
+    // =========================================================
+    // HAPUS AUTHENTICATION
+    // =========================================================
+
     const {
       error: deleteAuthError,
-    } = await admin.auth.admin.deleteUser(id)
+    } =
+      await admin.auth.admin.deleteUser(
+        id
+      )
 
     if (deleteAuthError) {
       console.error(
@@ -551,6 +695,10 @@ export async function DELETE(
       )
     }
 
+    // =========================================================
+    // SUCCESS
+    // =========================================================
+
     return NextResponse.json({
       message:
         "Akun pengguna berhasil dihapus secara permanen.",
@@ -563,7 +711,8 @@ export async function DELETE(
 
     return NextResponse.json(
       {
-        error: "Terjadi kesalahan pada server.",
+        error:
+          "Terjadi kesalahan pada server.",
       },
       {
         status: 500,
