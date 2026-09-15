@@ -562,13 +562,16 @@ export default function FounderStudentsPage() {
       return
     }
 
-    if (!phoneNumber) {
-      showToast(
-        'error',
-        'Nomor telepon siswa wajib diisi.',
-      )
-      return
-    }
+    if (
+    phoneNumber &&
+    !/^08\d{8,11}$/.test(phoneNumber)
+  ) {
+    showToast(
+      'error',
+      'Nomor telepon harus diawali 08 dan terdiri dari 10–13 digit angka.',
+    )
+    return
+  }
 
     if (
       !/^\d{10,13}$/.test(
@@ -623,7 +626,7 @@ export default function FounderStudentsPage() {
           form.gradeLevel,
         schoolName:
           schoolName || null,
-        phoneNumber,
+        phoneNumber: phoneNumber || null,
         parentId:
           form.parentId || null,
         status: form.status,
@@ -1571,9 +1574,8 @@ export default function FounderStudentsPage() {
                 <input
                   id="phoneNumber"
                   type="tel"
-                  required
                   inputMode="numeric"
-                  pattern="[0-9]{10,13}"
+                  pattern="08[0-9]{8,11}"
                   minLength={10}
                   maxLength={13}
                   value={
@@ -1604,7 +1606,7 @@ export default function FounderStudentsPage() {
                 />
 
                 <p className="mt-1.5 text-xs text-slate-400">
-                  Wajib diisi, 10–13 digit angka.
+                  Opsional. Jika diisi, harus diawali 08 dan terdiri dari 10–13 digit angka.
                 </p>
               </div>
 
