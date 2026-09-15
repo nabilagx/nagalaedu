@@ -573,17 +573,6 @@ export default function FounderStudentsPage() {
     return
   }
 
-    if (
-      !/^\d{10,13}$/.test(
-        phoneNumber,
-      )
-    ) {
-      showToast(
-        'error',
-        'Nomor telepon harus terdiri dari 10–13 digit angka.',
-      )
-      return
-    }
 
     if (
       form.parentId &&
