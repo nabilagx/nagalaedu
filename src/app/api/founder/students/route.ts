@@ -117,13 +117,26 @@ function isValidSchoolName(
 function isValidPhoneNumber(
   value: unknown
 ): value is string {
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return true
+  }
+
   if (typeof value !== 'string') {
     return false
   }
 
   const cleaned = value.trim()
 
-  return /^\d{10,13}$/.test(cleaned)
+  // Nomor HP boleh dikosongkan
+  if (cleaned === '') {
+    return true
+  }
+
+  // Jika diisi, wajib 08 + total 10–13 digit
+  return /^08\d{8,11}$/.test(cleaned)
 }
 
 async function parseJsonBody(
@@ -422,7 +435,9 @@ export async function POST(
       )
 
     const phoneNumber =
-      cleanString(body.phoneNumber)
+      normalizeNullableString(
+        body.phoneNumber
+      )
 
     const parentId =
       normalizeNullableString(
