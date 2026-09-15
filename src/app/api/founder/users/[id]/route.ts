@@ -36,7 +36,7 @@ function isValidUuid(value: unknown): value is string {
 function isValidPhone(phone: unknown): phone is string {
   return (
     typeof phone === "string" &&
-    /^\d{10,13}$/.test(phone)
+    /^08\d{8,11}$/.test(phone)
   )
 }
 
