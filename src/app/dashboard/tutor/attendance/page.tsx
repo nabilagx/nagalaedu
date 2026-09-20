@@ -1,6 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import {
   ArrowLeft,
   CalendarDays,
@@ -296,7 +302,7 @@ function StatusButton({
   )
 }
 
-export default function TutorAttendancePage() {
+function TutorAttendanceContent() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
@@ -1937,5 +1943,24 @@ export default function TutorAttendancePage() {
         </div>
       ) : null}
     </main>
+  )
+}
+
+export default function TutorAttendancePage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-gray-50">
+          <div className="flex min-h-[60vh] items-center justify-center">
+            <div className="flex items-center gap-3 text-sm font-medium text-gray-500">
+              <Loader2 className="animate-spin" size={20} />
+              Memuat halaman absensi...
+            </div>
+          </div>
+        </main>
+      }
+    >
+      <TutorAttendanceContent />
+    </Suspense>
   )
 }
