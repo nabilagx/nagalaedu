@@ -7,9 +7,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 type FounderAuthSuccess = {
   authorized: true
   user: User
-  supabase: Awaited<
-    ReturnType<typeof createClient>
-  >
+  supabase: Awaited<ReturnType<typeof createClient>>
 }
 
 type FounderAuthFailure = {
@@ -21,70 +19,131 @@ export type FounderAuthResult =
   | FounderAuthSuccess
   | FounderAuthFailure
 
-/**
- * Memastikan request berasal dari user
- * yang sudah login dan memiliki role Founder.
- *
- * Digunakan pada API yang hanya boleh
- * diakses oleh Founder.
- */
 export async function requireFounder(): Promise<FounderAuthResult> {
-  /**
-   * Client Supabase menggunakan cookie
-   * session user yang sedang login.
-   */
-  const supabase = await createClient()
+  try {
+    const supabase = await createClient()
 
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser()
+    // =========================================================
+    // 1. VERIFY LOGIN SESSION
+    // =========================================================
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser()
 
-  /**
-   * Tidak ada session / user.
-   */
-  if (userError || !user) {
-    return {
-      authorized: false,
-      response: NextResponse.json(
-        {
-          error:
-            'Anda harus login terlebih dahulu.',
-        },
-        {
-          status: 401,
-        }
-      ),
+    if (userError || !user) {
+      return {
+        authorized: false,
+        response: NextResponse.json(
+          {
+            error: 'Anda harus login terlebih dahulu.',
+          },
+          {
+            status: 401,
+            headers: {
+              'Cache-Control': 'no-store',
+            },
+          }
+        ),
+      }
     }
-  }
 
-  /**
-   * Ambil role user dari profiles.
-   *
-   * Menggunakan admin client supaya pengecekan
-   * role tidak terganggu oleh RLS profiles.
-   */
-  const admin = createAdminClient()
+    // =========================================================
+    // 2. GET USER PROFILE
+    // =========================================================
+    const admin = createAdminClient()
 
-  const {
-    data: profile,
-    error: profileError,
-  } = await admin
-    .from('profiles')
-    .select(
-      `
-        id,
-        role_id,
-        full_name
-      `
-    )
-    .eq('id', user.id)
-    .maybeSingle()
+    const {
+      data: profile,
+      error: profileError,
+    } = await admin
+      .from('profiles')
+      .select('id, role_id, full_name')
+      .eq('id', user.id)
+      .maybeSingle()
 
-  if (profileError) {
+    if (profileError) {
+      console.error(
+        'REQUIRE FOUNDER PROFILE ERROR:',
+        profileError
+      )
+
+      return {
+        authorized: false,
+        response: NextResponse.json(
+          {
+            error:
+              'Gagal memverifikasi akses pengguna.',
+          },
+          {
+            status: 500,
+            headers: {
+              'Cache-Control': 'no-store',
+            },
+          }
+        ),
+      }
+    }
+
+    // =========================================================
+    // 3. PROFILE MUST EXIST
+    // =========================================================
+    if (!profile) {
+      return {
+        authorized: false,
+        response: NextResponse.json(
+          {
+            error:
+              'Profil pengguna tidak ditemukan.',
+          },
+          {
+            status: 403,
+            headers: {
+              'Cache-Control': 'no-store',
+            },
+          }
+        ),
+      }
+    }
+
+    // =========================================================
+    // 4. VERIFY FOUNDER ROLE
+    //
+    // Berdasarkan schema NAGALA:
+    // Founder = role_id 1
+    // Tutor   = role_id 2
+    // Parent  = role_id 3
+    // =========================================================
+    if (profile.role_id !== 1) {
+      return {
+        authorized: false,
+        response: NextResponse.json(
+          {
+            error:
+              'Akses ditolak. Hanya Founder yang dapat mengakses fitur ini.',
+          },
+          {
+            status: 403,
+            headers: {
+              'Cache-Control': 'no-store',
+            },
+          }
+        ),
+      }
+    }
+
+    // =========================================================
+    // 5. AUTHORIZED
+    // =========================================================
+    return {
+      authorized: true,
+      user,
+      supabase,
+    }
+  } catch (error) {
     console.error(
-      'REQUIRE FOUNDER PROFILE ERROR:',
-      profileError
+      'REQUIRE FOUNDER UNEXPECTED ERROR:',
+      error
     )
 
     return {
@@ -92,57 +151,15 @@ export async function requireFounder(): Promise<FounderAuthResult> {
       response: NextResponse.json(
         {
           error:
-            'Gagal memverifikasi akses pengguna.',
+            'Terjadi kesalahan saat memverifikasi akses.',
         },
         {
           status: 500,
+          headers: {
+            'Cache-Control': 'no-store',
+          },
         }
       ),
     }
-  }
-
-  /**
-   * Profile tidak ditemukan.
-   */
-  if (!profile) {
-    return {
-      authorized: false,
-      response: NextResponse.json(
-        {
-          error:
-            'Profil pengguna tidak ditemukan.',
-        },
-        {
-          status: 403,
-        }
-      ),
-    }
-  }
-
-  /**
-   * Role 1 = Founder
-   */
-  if (profile.role_id !== 1) {
-    return {
-      authorized: false,
-      response: NextResponse.json(
-        {
-          error:
-            'Akses ditolak. Hanya Founder yang dapat mengakses fitur ini.',
-        },
-        {
-          status: 403,
-        }
-      ),
-    }
-  }
-
-  /**
-   * User terautentikasi + role Founder.
-   */
-  return {
-    authorized: true,
-    user,
-    supabase,
   }
 }
